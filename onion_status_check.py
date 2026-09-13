@@ -18,7 +18,7 @@ response at all is OFFLINE. The nuance goes into "status_detail":
 
     ONLINE                                  response < 400, TLS chain OK (or plain HTTP)
     ONLINE (TLS not verified)               responded over TLS with chain verification off
-    ONLINE (HTTP 4xx - access barrier)      401/403/407/429/451: login wall, WAF, rate limit
+    ONLINE (HTTP 4xx - access barrier)      401/402/403/407/429/451: login wall, WAF, rate limit
     ONLINE (HTTP 404 - missing resource)    server alive, path dead
     ONLINE (HTTP 5xx - server error)        application broken, host up
     OFFLINE                                 no response (see "error_class")
@@ -93,6 +93,13 @@ Output
   <out-dir>/<targets-stem>-<YYYYmmdd-HHMM>-controls.json  control targets
   <out-dir>/<targets-stem>-<YYYYmmdd-HHMM>.html           human-readable report
   Existing files are never overwritten; a numeric suffix is added instead.
+
+Exit status
+-----------
+  0  run completed and every control target answered (or --no-controls)
+  3  run completed but a control target failed: circuit suspect, do not
+     record anything as dead from this run
+  2  usage error (argparse)
 """
 
 from __future__ import annotations
@@ -124,7 +131,10 @@ DEFAULT_DELAY = (2.0, 5.0)  # seconds between requests; do not look like an aggr
 # Tor Browser's User-Agent. Every Tor Browser install sends this exact string by
 # design, so using it does not single this request out from the rest of the
 # traffic leaving the network — it is the opposite of fingerprinting.
-TOR_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0"
+# Tor Browser's default UA. It tracks Firefox ESR: Tor Browser 15.x = ESR 140.
+# Update when a new Tor Browser major ships, or the requests stand out as the
+# previous generation — the opposite of what this constant is for.
+TOR_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox/140.0"
 
 # Control targets: known-good services measured at the end of each run to
 # validate the Tor circuit. If these fail together with everything else, the
@@ -205,6 +215,13 @@ def looks_like_placeholder(title: str) -> bool:
     return bool(PLACEHOLDER_TITLE_RE.match(title.strip()))
 
 
+def looks_like_html(body: str) -> bool:
+    """Cheap sniff of the first bytes: a JSON or plain-text answer has no <title>
+    to begin with, and must not be flagged as "title only via JavaScript"."""
+    head = body[:2048].lower()
+    return any(tag in head for tag in ("<!doctype", "<html", "<head", "<body", "<title"))
+
+
 def extract_static_hints(html_text: str, soup: BeautifulSoup) -> dict:
     def meta_content(*, prop: str | None = None, name: str | None = None) -> str:
         attrs = {"property": prop} if prop else {"name": name}
@@ -269,6 +286,10 @@ def classify_error(exc: Exception, uri: str = "") -> str:
         # hidden-service descriptor; for clearnet, the exit could not resolve or
         # reach the host.
         return "hidden_service_unreachable" if is_onion(uri) else "host_unreachable_via_exit"
+    if "NewConnectionError" in text or "Failed to establish a new connection" in text:
+        # The TCP connection to the SOCKS proxy itself failed: Tor is not
+        # running or not listening where --proxy points. Nothing was measured.
+        return "proxy_unreachable"
     if "0x06" in text or "TTL expired" in text:
         return "circuit_failed"
     if "0x05" in text or "Connection refused" in text:
@@ -390,7 +411,9 @@ def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> di
         result["title_source"] = "html_title"
         result["needs_js_rendering"] = False
 
-        if looks_like_placeholder(title):
+        if not title and not looks_like_html(resp.text):
+            result["title_source"] = "not_html"  # JSON / plain text: no title expected
+        elif looks_like_placeholder(title):
             hints = extract_static_hints(resp.text, soup)
             result["static_hints"] = hints
             fallback_title = hints["meta_title"]
@@ -566,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
     online = [r for r in results if r["status"] == "ONLINE"]
     caveat = [r for r in online if r.get("status_detail", "ONLINE") != "ONLINE"]
     offline = [r for r in results if r["status"] != "ONLINE"]
+    exit_code = 0
 
     print(f"\nDone: {len(online)} online ({len(caveat)} with caveat), {len(offline)} offline.",
           file=sys.stderr)
@@ -577,12 +601,13 @@ def main(argv: list[str] | None = None) -> int:
         if ok < len(controls):
             print("  WARNING: circuit suspect — do NOT record any target as dead "
                   "based on this run.", file=sys.stderr)
+            exit_code = 3  # non-zero so cron/CI cannot record a dead batch by mistake
     print(f"JSON: {json_path}", file=sys.stderr)
     if controls:
         print(f"Controls: {controls_path}", file=sys.stderr)
     if not args.no_html:
         print(f"HTML: {html_path}", file=sys.stderr)
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
