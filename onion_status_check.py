@@ -450,9 +450,12 @@ def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> di
         result["content_type"] = resp.content_type
         if not title and not is_html_response(resp):
             result["title_source"] = "not_html"  # JSON / plain text: no title expected
-        elif looks_like_challenge(resp.text) and (not title or looks_like_placeholder(title)):
-            # Captcha / anti-DDoS wall with a 2xx: the server is up and is
-            # gating access. Label it as such instead of blaming JavaScript.
+        elif looks_like_challenge(title) or (
+                looks_like_challenge(resp.text) and (not title or looks_like_placeholder(title))):
+            # Either the title itself says so ("... Access Queue"), or the body
+            # does and there is no real title to contradict it.
+            # Captcha / anti-DDoS / queue wall with a 2xx: the server is up and
+            # is gating access. Label it as such instead of blaming JavaScript.
             result["title_source"] = "challenge_page"
             if resp.status_code < 400:
                 result["status_detail"] = "ONLINE (challenge page)" + (

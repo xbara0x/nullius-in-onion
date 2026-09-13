@@ -203,6 +203,13 @@ class CheckOneOffline(unittest.TestCase):
         self.assertEqual(r["title_source"], "challenge_page")
         self.assertFalse(r["needs_js_rendering"])
 
+    def test_challenge_in_real_title(self):
+        # A real, non-placeholder title that itself names the wall (seen on markets).
+        html = "<html><head><title>Some Market Access Queue</title></head><body>please wait</body></html>"
+        r = osc.check_one("n", "http://x.onion/", self._session(text=html), self.cfg)
+        self.assertEqual((r["title"], r["title_source"], r["status_detail"]),
+                         ("Some Market Access Queue", "challenge_page", "ONLINE (challenge page)"))
+
     def test_real_title_is_not_a_challenge(self):
         # The word "captcha" in a normal page body must not override a real title.
         html = "<html><head><title>Forum Home</title></head><body>Register (captcha required)</body></html>"
