@@ -2,6 +2,8 @@
 
 Honest liveness checks for `.onion` (and clearnet) URLs over Tor.
 
+**Status:** v0.1 — a working measurement tool; the JSON layout may still change.
+
 One plain HTTP GET per target through the local Tor SOCKS proxy; records the
 HTTP status code and the page `<title>`. No JavaScript, no images, no forms, no
 login, no crawling. At the end of each run it measures a few known-good control
@@ -15,7 +17,7 @@ looks identical in a summary count:
 
 | Cause | What actually happened | Naive verdict | This tool |
 |---|---|---|---|
-| **TLS** | a `.onion` address already *is* the public key, so CA-signed certificates there are the exception; verification "fails" | OFFLINE | `ONLINE (TLS not verified)` — chain checking is off for `.onion` by policy; the label says what the tool did, not that the certificate is bad |
+| **TLS** | a `.onion` address already *is* the public key, so CA-signed certificates there are the exception; verification "fails" | OFFLINE | `ONLINE (TLS not verified)` — chain checking is off for `.onion` by policy; the label says what the tool did, not that the certificate is bad. On clearnet the chain **is** verified, and the request is retried unverified only when the handshake fails — so a clearnet `TLS not verified` means "live server, certificate did not validate" |
 | **HTTP ≥ 400** | a WAF, a login wall or a rate limiter answered 403/429 — a living server saying "not you" | OFFLINE | `ONLINE (HTTP 403 - access barrier)` |
 | **HTTP/2-only** | the server answered in HTTP/2 only; `requests` speaks HTTP/1.1 and sees binary frames (`BadStatusLine`) | OFFLINE | `ONLINE [HTTP/2, measured via curl]` |
 
@@ -27,6 +29,8 @@ nothing at all is OFFLINE, and then `error_class` says why:
 | `hidden_service_unreachable` | Tor could not fetch the descriptor / reach the service (SOCKS 0x04) — the usual "it's down" |
 | `host_unreachable_via_exit` | clearnet host not resolvable/reachable from the exit (SOCKS 0x04) |
 | `invalid_onion_address` | Tor refused to even try (SOCKS 0x01): malformed name, bad checksum, invalid key, retired v2 address |
+| `socks_general_failure` | the same SOCKS 0x01 on a clearnet target |
+| `proxy_unreachable` | the TCP connection to the SOCKS proxy itself failed — Tor is not running, or not where `--proxy` points; nothing was measured |
 | `connection_refused_by_destination` | SOCKS 0x05 |
 | `circuit_failed` | SOCKS 0x06 / TTL expired |
 | `timeout` | no answer within `--timeout` |
@@ -46,7 +50,9 @@ from that run.
 
 - **No JavaScript rendering.** Rendering unknown dark-web pages is a different
   risk category and has historically been used for deanonymization. When a page
-  only fills its `<title>` via JS, the tool takes a second, purely static pass
+  only fills its `<title>` via JS (the title matches a placeholder such as
+  *Loading…*, *Please wait*, *Just a moment*, *Redirecting*, *Verifying humanity*,
+  *Checking your browser*), the tool takes a second, purely static pass
   over the HTML it already has (`og:title`, `twitter:title`, API endpoint hints,
   embedded-state markers) and otherwise flags the entry as
   `needs_js_rendering`, listed separately in the report.
@@ -87,19 +93,44 @@ results/<targets-stem>-<YYYYmmdd-HHMM>-controls.json   the control targets
 results/<targets-stem>-<YYYYmmdd-HHMM>.html            human-readable report
 ```
 
-Existing files are never overwritten; a numeric suffix is added on collision.
+Existing files are never overwritten; on a collision within the same minute a
+numeric suffix is added (`-2`, `-3`, …). File names use local time; the
+`checked_at` field inside the records is UTC.
 
-Each JSON record carries `status` (`ONLINE`/`OFFLINE`), `status_detail`,
-`http_code`, `title`, `title_source`, `tls_unverified`, `final_url`,
-`needs_js_rendering`, and for OFFLINE targets `error_class` and a truncated
-`error` string.
+Every record carries `name`, `uri`, `checked_at`, `status` (`ONLINE`/`OFFLINE`),
+`status_detail` and `http_code`.
+
+ONLINE records add `title`, `title_source` (`html_title`; `meta_tag` when the
+`<title>` was a placeholder and `og:title`/`twitter:title` was used instead;
+`html_title_placeholder` when nothing better was found; `not_html` when the
+answer was not an HTML document at all — JSON, plain text — so no title was
+expected and the entry is *not* flagged for JavaScript), `tls_unverified`,
+`final_url` and `needs_js_rendering`. When the title looked like a placeholder
+they also carry `static_hints`: `meta_title`, `meta_description`, `api_hints`,
+`spa_state_markers` and `script_srcs` — reported, never fetched.
+
+OFFLINE records have `http_code` and `title` set to `null`, plus `error_class`
+(table above) and a truncated `error` string.
+
+## Exit status
+
+| Code | Meaning |
+|---|---|
+| `0` | run completed; every control target answered (or `--no-controls`) |
+| `3` | run completed, but at least one control target failed — **circuit suspect**, do not record anything as dead from this run |
+| `2` | usage error (bad arguments) |
+
+Anything else is a crash. Scripts and cron jobs should treat any non-zero as
+"do not trust this run".
 
 ## A note on the User-Agent
 
-The tool sends Tor Browser's default User-Agent. Every Tor Browser install
-sends that exact string by design; using it makes these requests
-indistinguishable from ordinary Tor Browser traffic rather than singling them
-out.
+The tool sends Tor Browser's default User-Agent — currently the one of Tor
+Browser 15 (Firefox ESR 140). Every Tor Browser install sends that exact string
+by design; using it makes these requests indistinguishable from ordinary Tor
+Browser traffic rather than singling them out. It has to track Tor Browser's
+ESR line: when a new major ships, update `TOR_BROWSER_UA` or the requests start
+standing out as the previous generation.
 
 ## License
 
