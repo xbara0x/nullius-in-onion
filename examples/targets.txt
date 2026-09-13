@@ -1,0 +1,7 @@
+# One target per line: "Name | URL" or just "URL". Lines starting with # are ignored.
+# These are public, well-known services — safe to use as a smoke test.
+Tor Project (clearnet) | https://www.torproject.org/
+DuckDuckGo (onion) | https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/
+Ahmia (onion) | http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/
+Proton Mail (onion) | https://protonmailrmez3lotccipshtkleegetolb73fuirgj7r4o4vfu7ozyd.onion/
+BBC News (onion) | https://www.bbcweb3hytmzhn5d532owbu6oqadra5z3ar726vq5kgwwn6aucdccrad.onion/
