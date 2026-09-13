@@ -1,106 +1,47 @@
 #!/usr/bin/env python3
 """
-onion-status-check — honest liveness checks for .onion (and clearnet) URLs over Tor.
+onion-status-check — is it up, and who already lists it?
 
-What it does
-------------
-For each target it performs ONE plain HTTP GET through the local Tor SOCKS proxy
-and records the HTTP status code and the page <title>. That is all. It does not
-execute JavaScript, load images, submit forms, log in, or follow any link other
-than the target's own redirects. Deciding whether a title matches what you
-expected is analysis work for a human, not for this script.
+For each target: ONE plain HTTP GET through the local Tor SOCKS proxy, then
+the status code and the page <title>. No JavaScript, no images, no forms, no
+login, no crawling. Optionally, every target is also looked up in a set of
+index sources (curated lists, crawler lists, local catalogs) to say who
+already lists that address or that name.
+
+The full explanation — why a naive checker lies, what every label and error
+class means, how index matching works, exit codes — lives in README.md. What
+follows is the part a reader of the source needs.
 
 Status semantics
-----------------
-ANY HTTP response means ONLINE. A server answering 403 is alive; a hidden
-service with a self-signed certificate is alive. Only a target that sends no
-response at all is OFFLINE. The nuance goes into "status_detail":
+    ANY HTTP response means ONLINE; only silence is OFFLINE. The nuance goes
+    into "status_detail" (TLS not verified, access barrier, challenge page,
+    missing resource, server error, HTTP/2 via curl) and, for OFFLINE, into
+    "error_class" (see classify_error).
 
-    ONLINE                                  response < 400, TLS chain OK (or plain HTTP)
-    ONLINE (TLS not verified)               responded over TLS with chain verification off
-    ONLINE (HTTP 4xx - access barrier)      401/402/403/407/429/451: login wall, WAF, rate limit
-    ONLINE (challenge page)                 2xx, but the body is a captcha / anti-DDoS / queue page
-    ONLINE (HTTP 404 - missing resource)    server alive, path dead
-    ONLINE (HTTP 5xx - server error)        application broken, host up
-    OFFLINE                                 no response (see "error_class")
-
-This distinction exists because the naive version of this tool — "anything that
-isn't a clean 200 is dead" — produced false OFFLINE verdicts in three separate
-ways, each of which looks identical in a summary count:
-
-  1. TLS.    A .onion address already IS the public key, so CA-signed
-             certificates on hidden services are the exception rather than the
-             rule. Verifying the chain there is close to meaningless, and
-             treating a handshake failure as "down" is simply wrong. Chain
-             verification is therefore disabled for .onion from the first
-             attempt, and the result is labeled "TLS not verified" — a
-             statement about what the tool did, not a claim that the
-             certificate is bad (some onions do carry CA-signed certificates).
-             On clearnet verification stays on, and is retried without it ONLY
-             when the handshake fails — to tell "bad certificate" apart from
-             "server gone". None of this loosens anything: still no JS, no
-             login, no credentials.
-  2. HTTP >= 400.  A 403 from a WAF or a login wall is a living server saying
-             "not you". Counting it as dead hides exactly the targets that are
-             most interesting.
-  3. HTTP/2. `requests` speaks HTTP/1.1 only. A server that answers only in
-             HTTP/2 sends binary frames that surface as BadStatusLine, which
-             the naive version reported as OFFLINE. When the failure has that
-             signature — and only then — the script asks `curl --http2` for a
-             second opinion through the same proxy. It does not retry via curl
-             on ordinary failures: if Tor cannot reach the service, curl uses
-             the same daemon and fails the same way, doubling the cost of every
-             dead target for nothing.
+Three false-OFFLINE traps this file exists to avoid
+    1. TLS: a .onion address already IS the public key, so chain verification
+       is off for .onion by policy and the label says so. Clearnet is verified,
+       and retried unverified only when the handshake fails.
+    2. HTTP >= 400: a 403 from a WAF or a login wall is a living server.
+    3. HTTP/2-only servers: `requests` speaks HTTP/1.1; when the failure has the
+       HTTP/2 signature — and only then — `curl --http2` gives a second opinion.
 
 Circuit controls
-----------------
-At the end of every run the script measures a few control targets that are
-known to be up. A batch of negative results is far more often the instrument or
-the circuit than the population; a control failure means "do not record anything
-as dead from this run". Do not skip this step — false negatives caught this way
-are the reason it exists.
-
-Placeholder titles
-------------------
-Some pages only populate <title> via JavaScript ("Loading...", "Just a
-moment..."). The script deliberately does NOT render JS: rendering unknown
-dark-web pages is a different risk category and has historically been used for
-deanonymization. Instead, when the title looks like a placeholder, it takes a
-second, purely static pass over the HTML already downloaded: it checks
-<meta property="og:title"> / twitter:title (often server-rendered even on SPAs)
-as an alternative title, and looks for API endpoint hints (fetch/axios/XHR
-calls, "/api/", "/graphql") and embedded-state markers (__NEXT_DATA__, __NUXT__,
-__INITIAL_STATE__) — reported as hints only, never fetched. If nothing resolves,
-the entry is flagged "needs_js_rendering" and listed separately in the report,
-instead of disappearing among the resolved ones.
-
-Requirements
-------------
-  - A local Tor daemon (SOCKS5 on 127.0.0.1:9050 by default)
-  - Python 3.10+, `pip install requests[socks] beautifulsoup4`
-  - `curl` on PATH (only used for the HTTP/2 second opinion)
+    Every run ends by measuring known-good targets. If they fail, nothing from
+    the run may be recorded as dead (exit 3). Index sources that fail to load
+    have the same effect on "unlisted".
 
 Usage
------
-  python3 onion_status_check.py targets.txt
-  python3 onion_status_check.py targets.txt --out-dir results --timeout 25
-
-  targets.txt: one target per line, either "Name | URL" or just "URL".
-  Lines starting with "#" are ignored.
-
-Output
-------
-  <out-dir>/<targets-stem>-<YYYYmmdd-HHMM>.json           raw results
-  <out-dir>/<targets-stem>-<YYYYmmdd-HHMM>-controls.json  control targets
-  <out-dir>/<targets-stem>-<YYYYmmdd-HHMM>.html           human-readable report
-  Existing files are never overwritten; a numeric suffix is added instead.
+    python3 onion_status_check.py targets.txt [--indices sources.txt] [--catalog PATH]
+                                              [--indices-only] [--out-dir DIR] ...
+    targets.txt: one per line, "Name | URL" or just "URL"; '#' comments.
+    sources.txt: one per line, "Name | URL-or-path"; '#' comments.
 
 Exit status
------------
-  0  run completed and every control target answered (or --no-controls)
-  3  run completed but a control target failed: circuit suspect, do not
-     record anything as dead from this run
-  2  usage error (argparse)
+    0  run completed and every control answered (or --no-controls)
+    3  run completed but a control or an index source failed — do not trust
+       negatives from this run
+    2  usage error
 """
 
 from __future__ import annotations
@@ -204,6 +145,264 @@ def read_targets(path: Path) -> list[tuple[str, str]]:
 def is_onion(uri: str) -> bool:
     host = urlparse(uri).hostname or ""
     return host.endswith(".onion")
+
+
+# --------------------------------------------------------------------------- #
+# Index cross-check (optional): who already lists this target?
+# --------------------------------------------------------------------------- #
+
+MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+ONION_RE = re.compile(r"\b([a-z2-7]{56}\.onion)\b")
+# Words that name the *kind* of thing, not the thing — dropped before comparing
+# names so that "XSS (Deep)" and "XSS forum" still meet.
+NAME_NOISE_RE = re.compile(
+    r"\b(market(place)?|forum(s)?|shop(s)?|store|onion|mirror(s)?|link(s)?|official|"
+    r"deep|dark|surface|clearnet|tor|v2|v3|site|the|project|blog|team|group|club|"
+    r"service(s)?|network|online|new|old|home|page|index|directory|leaked)\b|\(.*?\)",
+    re.IGNORECASE,
+)
+
+
+# Keys that are a generic word on their own once the noise is gone. "Onion
+# Search" and "Deep Search" both collapse to "search" — that is not a match.
+GENERIC_KEYS = {"search", "searchengine", "engine", "hidden", "wiki", "hiddenwiki", "news", "mail",
+                "chat", "index", "directory", "home", "answers", "questions", "leaks", "leak",
+                "dump", "dumps", "data", "database", "databases", "underground", "anonymous",
+                "community", "hub", "club", "team", "group", "project", "service", "services",
+                "escrow", "vendor", "vendors", "verified", "trusted", "best", "free", "secure",
+                # topic words of this domain: they describe a category, not a site
+                "darknet", "darkweb", "deepweb", "carding", "cards", "exploit", "exploits",
+                "phishing", "ransomware", "hacking", "hacked", "hacker", "hackers", "bitcoin",
+                "crypto", "monero", "center", "centre", "guns", "drugs", "weed", "list", "lists",
+                "login", "entering", "welcome", "premium", "private", "global",
+                # nationalities and languages name a region, not a site
+                "russian", "german", "french", "turkish", "polish", "italian", "spanish", "chinese",
+                "brazilian", "english", "american", "european", "arabic", "japanese", "korean"}
+
+
+def _words(text: str) -> list[str]:
+    """Lowercase alphanumeric words, with a light plural fold so that
+    'LEAK FORUMS' and 'Leak Forum' meet: a trailing 's' after a consonant is
+    dropped from words of five or more letters ('forums', 'leaks' — but not
+    'nexus', 'anubis', 'osiris', 'abacus', 'kairos')."""
+    out = []
+    for w in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(w) >= 5 and w.endswith("s") and w[-2] not in "aeious":
+            w = w[:-1]
+        out.append(w)
+    return out
+
+
+def normalize_name(name: str) -> str:
+    """Lowercase, drop kind-words and punctuation: 'XSSF (Dark)' -> 'xssf'."""
+    return "".join(_words(NAME_NOISE_RE.sub(" ", name)))
+
+
+def name_keys(name: str) -> list[str]:
+    """Both the noise-stripped key and the plain compact key, minus generic
+    words: 'Find Tor' -> ['find', 'findtor'] so it still meets 'FindTor'."""
+    keys = []
+    for k in (normalize_name(name), "".join(_words(name))):
+        if len(k) >= 4 and k not in GENERIC_KEYS and k not in keys:
+            keys.append(k)
+    return keys
+
+
+def name_words(name: str) -> frozenset[str]:
+    """The meaningful words of a name: noise and generic words removed, 4+
+    letters each. 'Cracking Island' -> {'cracking', 'island'}."""
+    return frozenset(w for w in _words(NAME_NOISE_RE.sub(" ", name))
+                     if len(w) >= 4 and w not in GENERIC_KEYS)
+
+
+def first_segment(name: str) -> str:
+    """'Nexus Market - Escrow Marketplace' -> 'Nexus Market'. A page title or
+    a long label usually starts with the site's own name."""
+    return re.split(r"\s[-|–—:]\s|\s\|\s|\s{2,}", name.strip())[0]
+
+
+def names_match(a_keys: list[str], a_words: frozenset[str], b_keys: list[str], b_words: frozenset[str]) -> bool:
+    """Same name after normalization, or one name's meaningful words are all
+    whole words of the other (with at least one word of 5+ letters, so a
+    single short word never carries a match). Substring containment is
+    deliberately NOT used: 'trustmarket' contains 'stmarket', and a long
+    title contains all sorts of listed words."""
+    if set(a_keys) & set(b_keys):
+        return True
+    if not a_words or not b_words:
+        return False
+    small, big = (a_words, b_words) if len(a_words) <= len(b_words) else (b_words, a_words)
+    if not small <= big:
+        return False
+    # One shared word carries a match only if it is long enough to be a name
+    # ("lockbit", "atomsilo", "hacktown"), never a short common word.
+    return len(small) >= 2 or any(len(w) >= 7 for w in small)
+
+
+def host_of(uri: str) -> str:
+    """Hostname of a URL, lowercased, without a leading "www.". Never raises:
+    a hand-edited catalog contains malformed URLs, and one of them must not
+    abort the whole load — it just yields no host."""
+    try:
+        host = (urlparse(uri if "://" in uri else "http://" + uri).hostname or "").lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+HTML_LINK_RE = re.compile(r"<a\s[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+TAG_RE = re.compile(r"<[^>]+>")
+
+
+class Source:
+    """One index of onion addresses: a local file/tree or a remote page.
+
+    Anything that lists addresses works as a source — a curated index such as
+    dark.fail or tor.taxi, Ahmia's public onion list, a blog post, a saved
+    forum thread, a markdown catalog like deepdarkCTI, your own bookmarks.
+    The loader understands markdown links, HTML anchors and bare v3 addresses
+    (labeled by the text on the same line), and never decides anything: it
+    only remembers who lists what.
+    """
+
+    def __init__(self, name: str, origin: str):
+        self.name = name
+        self.origin = origin
+        self.hosts: dict[str, list[dict]] = {}
+        self.named: list[tuple[list[str], frozenset[str], dict]] = []
+        self.files = 0
+        self.error: str | None = None
+
+    @property
+    def names(self) -> int:
+        return len(self.named)
+
+    @property
+    def is_remote(self) -> bool:
+        return self.origin.startswith(("http://", "https://"))
+
+    # -- loading -----------------------------------------------------------
+    def load_local(self) -> None:
+        root = Path(self.origin).expanduser()
+        if not root.exists():
+            self.error = "path not found"
+            return
+        files = [root] if root.is_file() else sorted(
+            p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in (".md", ".txt", ".html", ".htm", ".csv")
+            and ".git" not in p.parts)
+        for f in files:
+            self.files += 1
+            rel = str(f.relative_to(root)) if root.is_dir() else f.name
+            self._ingest(f.read_text(encoding="utf-8", errors="replace"), rel)
+
+    def load_remote(self, session: requests.Session, cfg: "Config") -> None:
+        try:
+            resp, _ = fetch(self.origin, session, cfg)
+        except requests.exceptions.RequestException as e:
+            self.error = classify_error(e, self.origin)
+            return
+        if resp.status_code >= 400:
+            self.error = f"HTTP {resp.status_code}"
+            return
+        self.files = 1
+        self._ingest(resp.text, host_of(self.origin))
+        if not self.hosts:
+            # A 200 with no addresses in it is a source that changed shape (or
+            # a challenge page) — not "nobody is listed". Say so, loudly.
+            self.error = "loaded but no addresses found — page format changed?"
+
+    def _ingest(self, text: str, where: str) -> None:
+        # HTML anchors first (remote pages), then markdown links, then bare
+        # addresses labeled by the visible text of their line. Block-level
+        # tags count as line breaks, so a one-line HTML page still yields one
+        # label per entry.
+        if "<" in text:
+            text = re.sub(r"(?i)</?(p|br|li|div|h[1-6]|tr|td|th|section|article)\b[^>]*>", "\n", text)
+        for lineno, line in enumerate(text.splitlines(), 1):
+            seen_hosts: set[str] = set()
+            for url, inner in HTML_LINK_RE.findall(line):
+                name = TAG_RE.sub("", inner).strip()
+                self._add(name, host_of(url), where, lineno, seen_hosts)
+            for name, url in MD_LINK_RE.findall(line):
+                self._add(name.strip(), host_of(url), where, lineno, seen_hosts)
+            label = TAG_RE.sub(" ", ONION_RE.sub(" ", line))
+            label = re.sub(r"https?://\S*|\s+", " ", label).strip(" |:-–—")[:80]
+            for onion in ONION_RE.findall(line):
+                self._add(label, onion, where, lineno, seen_hosts)
+
+    def _add(self, name: str, host: str, where: str, lineno: int, seen: set[str]) -> None:
+        if not host or host in seen:
+            return
+        seen.add(host)
+        entry = {"source": self.name, "name": name, "host": host, "where": where, "line": lineno}
+        self.hosts.setdefault(host, []).append(entry)
+        keys, words = name_keys(name), name_words(name)
+        if keys or words:
+            self.named.append((keys, words, entry))
+
+    # -- lookup ------------------------------------------------------------
+    def lookup(self, host: str, candidates: list[tuple[list[str], frozenset[str]]]) -> tuple[list[dict], list[dict]]:
+        listed = self.hosts.get(host, [])[:5]
+        name_matches: list[dict] = []
+        if not listed:
+            for t_keys, t_words in candidates:
+                for c_keys, c_words, e in self.named:
+                    if e not in name_matches and names_match(t_keys, t_words, c_keys, c_words):
+                        name_matches.append(e)
+        return listed, name_matches[:5]
+
+
+def read_sources(path: Path) -> list[Source]:
+    """One source per line: "Name | URL-or-path" (or just the URL/path).
+    Lines starting with "#" are ignored."""
+    sources = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" in line:
+            name, origin = (p.strip() for p in line.split("|", 1))
+        else:
+            name = origin = line
+        sources.append(Source(name, origin))
+    return sources
+
+
+class Indices:
+    """All sources of a run, loaded once, queried per target."""
+
+    def __init__(self, sources: list[Source]):
+        self.sources = sources
+
+    def load(self, session: requests.Session | None, cfg: "Config | None") -> None:
+        for src in self.sources:
+            if src.is_remote:
+                if session is None or cfg is None:
+                    src.error = "no session"
+                else:
+                    src.load_remote(session, cfg)
+            else:
+                src.load_local()
+
+    def lookup(self, uri: str, label: str = "", title: str = "") -> dict:
+        host = host_of(uri)
+        candidates: list[tuple[list[str], frozenset[str]]] = []
+        for text in (label if label and host_of(label) != host else "", title):
+            if text:  # a label that is just the URL says nothing
+                seg = first_segment(text)
+                candidates.append((name_keys(seg), name_words(seg)))
+        listed_in: list[dict] = []
+        name_matches: list[dict] = []
+        failed = [s.name for s in self.sources if s.error]
+        for src in self.sources:
+            if src.error:
+                continue
+            l, n = src.lookup(host, candidates)
+            listed_in += l
+            name_matches += n
+        verdict = "listed" if listed_in else ("name-match" if name_matches else "unlisted")
+        return {"verdict": verdict, "listed_in": listed_in, "name_matches": name_matches,
+                "sources_failed": failed}
 
 
 # --------------------------------------------------------------------------- #
@@ -504,12 +703,24 @@ def write_html_report(results: list[dict], out_path: Path,
     lines = ["<!doctype html><html><head><meta charset='utf-8'>"
              "<title>onion-status-check report</title></head><body>"]
 
+    def cat_note(r: dict) -> str:
+        ix = r.get("indices")
+        if not ix:
+            return ""
+        if ix["verdict"] == "listed":
+            who = ", ".join(sorted({_esc(m["source"]) for m in ix["listed_in"]}))
+            return f" — <b>listed by</b> {who}"
+        if ix["verdict"] == "name-match":
+            names = ", ".join(f"{_esc(m['source'])}: {_esc(m['name'])}" for m in ix["name_matches"][:3])
+            return f" — <b>name-match</b> ({names})"
+        return " — unlisted"
+
     lines.append(f"<h1>Online, title resolved ({len(resolved)})</h1><ol>")
     for r in resolved:
         title = r.get("title") or "(no title)"
         note = " [via meta tag, not &lt;title&gt;]" if r.get("title_source") == "meta_tag" else ""
         lines.append(f"<li><a href='{_esc(r['uri'])}' target='_blank'>{_esc(title)}</a>{note}"
-                     f" — target: {_esc(r['name'])}</li>")
+                     f" — target: {_esc(r['name'])}{cat_note(r)}</li>")
     lines.append("</ol>")
 
     lines.append(f"<h1>Online, but title only via JavaScript ({len(needs_js)})</h1><ol>")
@@ -570,8 +781,12 @@ def unique_base(out_dir: Path, stem: str) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="onion_status_check.py",
-        description="Honest liveness checks for .onion (and clearnet) URLs over Tor: "
-                    "one plain GET per target, HTTP code + <title>, circuit controls at the end.",
+        description="Is it up, and who already lists it? One plain GET per .onion/clearnet target "
+                    "through Tor (status code + <title>, circuit controls at the end), plus an optional "
+                    "cross-check against any index sources you name. Details: README.md",
+        epilog='targets file: one per line, "Name | URL" or just "URL". '
+               'sources file (--indices): one per line, "Name | URL-or-path". '
+               'Lines starting with # are ignored.',
     )
     p.add_argument("targets", type=Path,
                    help='text file, one target per line: "Name | URL" or just "URL"')
@@ -586,7 +801,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-controls", action="store_true",
                    help="skip the circuit control targets (not recommended)")
     p.add_argument("--no-html", action="store_true", help="write JSON only")
+    p.add_argument("--indices", type=Path, metavar="FILE",
+                   help='sources list, one per line "Name | URL-or-path" — see the Index cross-check section')
+    p.add_argument("--catalog", type=Path, nargs="+", metavar="PATH",
+                   help="add a local file or directory tree as an index source (shortcut for a path line in --indices)")
+    p.add_argument("--indices-only", action="store_true",
+                   help="cross-check only; measure no target (remote indices are still fetched once)")
     return p.parse_args(argv)
+
+
+def print_indices_summary(indices: "Indices", results: list[dict]) -> None:
+    for src in indices.sources:
+        if src.error:
+            print(f"  source {src.name}: FAILED ({src.error}) — 'unlisted' is unreliable this run",
+                  file=sys.stderr)
+    counts = {"listed": 0, "name-match": 0, "unlisted": 0}
+    for r in results:
+        counts[r["indices"]["verdict"]] += 1
+    print(f"Indices: {counts['listed']} listed, {counts['name-match']} name-match, "
+          f"{counts['unlisted']} unlisted.", file=sys.stderr)
+    for r in results:
+        ix = r["indices"]
+        if ix["verdict"] == "listed":
+            who = ", ".join(sorted({m["source"] for m in ix["listed_in"]}))
+            print(f"  listed: {r['name']} -> {who}", file=sys.stderr)
+        elif ix["verdict"] == "name-match":
+            hits = "; ".join(f"{m['source']}: {m['name']} <{m['host'][:24]}…>" for m in ix["name_matches"][:3])
+            print(f"  name-match: {r['name']} -> {hits}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -601,16 +842,52 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no targets found in {args.targets}", file=sys.stderr)
         return 2
 
-    print(f"Checking {len(targets)} URLs via {cfg.proxy} (timeout {cfg.timeout}s)...", file=sys.stderr)
+    sources: list[Source] = []
+    if args.indices:
+        if not args.indices.is_file():
+            print(f"indices file not found: {args.indices}", file=sys.stderr)
+            return 2
+        sources += read_sources(args.indices)
+    for path in args.catalog or []:
+        sources.append(Source(str(path), str(path)))
+    if args.indices_only and not sources:
+        print("--indices-only needs --indices and/or --catalog", file=sys.stderr)
+        return 2
+    indices: Indices | None = Indices(sources) if sources else None
 
     session = requests.Session()
     session.proxies = {"http": cfg.proxy, "https": cfg.proxy}
     session.headers["User-Agent"] = TOR_BROWSER_UA
 
+    if indices is not None:
+        remote = sum(1 for s in sources if s.is_remote)
+        print(f"Loading {len(sources)} index source(s) ({remote} remote, via {cfg.proxy})...", file=sys.stderr)
+        indices.load(session, cfg)
+        for src in sources:
+            print(f"  {src.name}: " + (f"FAILED ({src.error})" if src.error else
+                  f"{len(src.hosts)} hosts, {src.names} named entries, {src.files} file(s)"), file=sys.stderr)
+
+    if args.indices_only:
+        assert indices is not None
+        results = [{"name": name, "uri": uri, "indices": indices.lookup(uri, label=name)}
+                   for name, uri in targets]
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        base = unique_base(args.out_dir, args.targets.stem + "-indices")
+        json_path = args.out_dir / f"{base}.json"
+        json_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+        print_indices_summary(indices, results)
+        print(f"JSON: {json_path}", file=sys.stderr)
+        return 3 if any(s.error for s in sources) else 0
+
+    print(f"Checking {len(targets)} URLs via {cfg.proxy} (timeout {cfg.timeout}s)...", file=sys.stderr)
+
     results = []
     for i, (name, uri) in enumerate(targets, 1):
         print(f"[{i}/{len(targets)}] {name} ({uri})", file=sys.stderr)
-        results.append(check_one(name, uri, session, cfg))
+        r = check_one(name, uri, session, cfg)
+        if indices is not None:
+            r["indices"] = indices.lookup(uri, label=name, title=r.get("title") or "")
+        results.append(r)
         if i < len(targets):
             time.sleep(random.uniform(*cfg.delay))
 
@@ -642,6 +919,10 @@ def main(argv: list[str] | None = None) -> int:
           file=sys.stderr)
     for r in caveat:
         print(f"  caveat: {r['name']} — {r.get('status_detail')}", file=sys.stderr)
+    if indices is not None:
+        print_indices_summary(indices, results)
+        if any(src.error for src in indices.sources):
+            exit_code = 3
     if controls:
         ok = sum(1 for c in controls if c["status"] == "ONLINE")
         print(f"Controls: {ok}/{len(controls)} online.", file=sys.stderr)

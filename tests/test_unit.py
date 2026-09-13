@@ -275,5 +275,152 @@ class TargetsAndOutput(unittest.TestCase):
         self.assertEqual(osc.main([str(f)]), 2)
 
 
+class IndexCrossCheck(unittest.TestCase):
+    """--indices / --catalog: who lists this host, by exact host or by name."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        (self.d / "forum.md").write_text(
+            "| Name | Status |\n| --- | --- |\n"
+            "| [XSSF (Dark)](http://xssfnet2env65wnrlixkn4io3gzukirz7w767gdilk64iq6dg33jwsad.onion/) | ONLINE |\n"
+            "| [DARK FAIL](https://dark.fail) | ONLINE |\n"
+            "| [RUNION](http://runionv3do7jdylpx7ufc6qkmygehsiuichjcstpj4hb2ycqrnmp67ad.onion) | ONLINE |\n"
+            "bare address on a line: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion\n")
+        (self.d / "sub").mkdir()
+        (self.d / "sub" / "markets.md").write_text("|[Digital Den](http://ddenjrrcjmltjgidxbtqrqbnyhunhlo4dhb6oiy63n4sk6ekzg5aodqd.onion)| ONLINE | |\n")
+        (self.d / ".git").mkdir()
+        (self.d / ".git" / "ignored.md").write_text("[SHOULD NOT LOAD](http://ignoredignoredignoredignoredignoredignoredignoredignoredxx.onion)\n")
+        self.local = osc.Source("local", str(self.d))
+        self.local.load_local()
+
+    def _indices(self, *sources):
+        ix = osc.Indices(list(sources))
+        return ix
+
+    def test_local_loads_links_and_bare_addresses_recursively_skipping_git(self):
+        self.assertEqual(self.local.files, 2)
+        self.assertIn("dark.fail", self.local.hosts)
+        self.assertIn("ddenjrrcjmltjgidxbtqrqbnyhunhlo4dhb6oiy63n4sk6ekzg5aodqd.onion", self.local.hosts)
+        self.assertIn("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion", self.local.hosts)
+        self.assertNotIn("ignoredignoredignoredignoredignoredignoredignoredignoredxx.onion", self.local.hosts)
+        self.assertEqual(self.local.hosts["runionv3do7jdylpx7ufc6qkmygehsiuichjcstpj4hb2ycqrnmp67ad.onion"][0]["line"], 5)
+
+    def test_malformed_url_does_not_abort(self):
+        (self.d / "bad.md").write_text("[BAD](http://[garbage/) and [OK](http://okhost.example/)\n")
+        src = osc.Source("l", str(self.d)); src.load_local()
+        self.assertIn("okhost.example", src.hosts)
+        self.assertEqual(osc.host_of("http://[garbage/"), "")
+
+    def test_missing_local_path_is_a_failed_source(self):
+        src = osc.Source("nope", str(self.d / "nope")); src.load_local()
+        self.assertEqual(src.error, "path not found")
+
+    def test_remote_html_source_via_fake_session(self):
+        html = ('<html><body><h3>Dread</h3><a href="http://dreadytofatroptsdj6io7l3xptbet6onoyno2yv7jicoxknyazubrad.onion">'
+                'dreadyto…</a><p>VormWeb <code>volkancfgpi4c7ghph6id2t7vcntenuly66qjt6oedwtjmyj4tkk5oqd.onion</code></p></body></html>')
+        class R:
+            status_code, text, url = 200, html, "https://index.example/"
+            headers = {"Content-Type": "text/html"}
+        class S:
+            def get(self, *a, **k): return R()
+        src = osc.Source("idx", "https://index.example/")
+        src.load_remote(S(), osc.Config(osc.DEFAULT_PROXY, 5, (0, 0)))
+        self.assertIsNone(src.error)
+        self.assertIn("dreadytofatroptsdj6io7l3xptbet6onoyno2yv7jicoxknyazubrad.onion", src.hosts)
+        bare = src.hosts["volkancfgpi4c7ghph6id2t7vcntenuly66qjt6oedwtjmyj4tkk5oqd.onion"][0]
+        self.assertEqual(bare["name"], "VormWeb")  # labeled by the visible text of its line
+
+    def test_remote_200_without_addresses_is_a_failed_source(self):
+        class R:
+            status_code, text, url = 200, "<html><body>We redesigned! <a href='/about'>About</a></body></html>", "https://index.example/"
+            headers = {"Content-Type": "text/html"}
+        class S:
+            def get(self, *a, **k): return R()
+        src = osc.Source("idx", "https://index.example/")
+        src.load_remote(S(), osc.Config(osc.DEFAULT_PROXY, 5, (0, 0)))
+        self.assertIn("no addresses found", src.error or "")
+
+    def test_remote_failure_marks_source_and_verdict_unreliable(self):
+        class S:
+            def get(self, *a, **k): raise CE(SOCKS_0x04)
+        src = osc.Source("down", "http://downdowndowndowndowndowndowndowndowndowndowndowndowndown.onion/")
+        src.load_remote(S(), osc.Config(osc.DEFAULT_PROXY, 5, (0, 0)))
+        self.assertEqual(src.error, "hidden_service_unreachable")
+        ix = self._indices(src, self.local)
+        r = ix.lookup("http://example.org/", label="Nobody")
+        self.assertEqual(r["verdict"], "unlisted")
+        self.assertEqual(r["sources_failed"], ["down"])
+
+    def test_listed_by_exact_host(self):
+        ix = self._indices(self.local)
+        r = ix.lookup("http://runionv3do7jdylpx7ufc6qkmygehsiuichjcstpj4hb2ycqrnmp67ad.onion/some/path")
+        self.assertEqual(r["verdict"], "listed")
+        self.assertEqual(r["listed_in"][0]["source"], "local")
+        self.assertEqual(ix.lookup("https://www.dark.fail/")["verdict"], "listed")  # www. stripped
+
+    def test_name_match_from_label_and_from_title(self):
+        ix = self._indices(self.local)
+        r = ix.lookup("http://xssfnet2env25nv16wnqn3vik4igq3igq3igq767igdik6jsad.onion", label="XSSF (Deep)")
+        self.assertEqual((r["verdict"], r["name_matches"][0]["name"]), ("name-match", "XSSF (Dark)"))
+        r = ix.lookup("http://ddenupaqxuvvilo4yetjv3qbq7p45vqbrr7vd2fmorjglh5bk7uh73id.onion",
+                      label="", title="Digital Den - best digital goods")
+        self.assertEqual((r["verdict"], r["name_matches"][0]["where"]), ("name-match", "sub/markets.md"))
+
+    def test_label_that_is_just_the_url_does_not_match(self):
+        u = "http://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.onion/"
+        self.assertEqual(self._indices(self.local).lookup(u, label=u)["verdict"], "unlisted")
+
+    def test_shared_common_word_is_not_a_match(self):
+        (self.d / "m.md").write_text("[Russian Market (Deep)](https://russianmarket.gs)\n"
+                                     "[HIDDEN LINKS](http://wclekwrf2aclunlmuikf2bopusjfv66jlhwtgbiycy5nw524r6ngioid.onion)\n"
+                                     "[Deep Search](http://search7tdrcvri22rieiwgi5g46qnwsesvnubqav2xakhezv4hjzkkad.onion)\n"
+                                     "[FindTor](http://findtorroveq5wdnipkaojfpqulxnkhblymc7aramjzajcvpptd4rjqd.onion/)\n")
+        src = osc.Source("l", str(self.d)); src.load_local(); ix = self._indices(src)
+        self.assertEqual(ix.lookup("http://commudazrdyhbullltfdy222krfjhoqzizks5ejmocpft3ijtxq5khqd.onion", label="Russian Community")["verdict"], "unlisted")
+        self.assertEqual(ix.lookup("http://hiddenwep33eg4w225lcdwcez4iefacwpiia6cwg7pfmcz4hvijzbgid.onion", label="Hidden Wiki")["verdict"], "unlisted")
+        self.assertEqual(ix.lookup("http://luciferpvnfmqku7agzmcdoskor536za5574qtyx2vhrnuozv5fla6ad.onion", label="Onion Search")["verdict"], "unlisted")
+        r = ix.lookup("http://findtorrstubj7z4ax7wuhfx5dhy4iekiew6ljjk7bl2h7q2j7oulxyd.onion", label="Find Tor")
+        self.assertEqual((r["verdict"], r["name_matches"][0]["name"]), ("name-match", "FindTor"))
+
+    def test_normalize_name(self):
+        self.assertEqual(osc.normalize_name("XSSF (Dark)"), "xssf")
+        self.assertEqual(osc.normalize_name("Nexus Market"), "nexus")
+        self.assertEqual(osc.normalize_name("LEAK FORUMS"), "leak")
+        self.assertEqual(osc.name_keys("LEAK FORUMS"), osc.name_keys("Leak Forum"))  # plural folded, "leak" alone is generic
+        self.assertTrue(osc.names_match(osc.name_keys("LEAK FORUMS"), osc.name_words("LEAK FORUMS"),
+                                        osc.name_keys("Leak Forum"), osc.name_words("Leak Forum")))
+        self.assertFalse(osc.names_match(osc.name_keys("Bitcoin Miner"), osc.name_words("Bitcoin Miner"),
+                                         osc.name_keys("Bitcoin Market"), osc.name_words("Bitcoin Market")))
+        self.assertEqual(osc.name_keys("Find Tor"), ["find", "findtor"])
+        self.assertEqual(osc.name_keys("Onion Search"), ["onionsearch"])  # "search" alone is generic; the compact form is a name
+
+    def test_read_sources(self):
+        f = self.d / "sources.txt"
+        f.write_text("# c\ndark.fail | https://dark.fail/\n/some/local/path\n")
+        srcs = osc.read_sources(f)
+        self.assertEqual([(s.name, s.origin, s.is_remote) for s in srcs],
+                         [("dark.fail", "https://dark.fail/", True), ("/some/local/path", "/some/local/path", False)])
+
+    def test_indices_only_main_with_catalog_shortcut(self):
+        t = self.d / "targets.txt"
+        t.write_text("XSSF (Deep) | http://xssfnet2env25nv16wnqn3vik4igq3igq3igq767igdik6jsad.onion\n"
+                     "https://dark.fail/\nNobody | http://example.org/\n")
+        out = self.d / "out"
+        self.assertEqual(osc.main([str(t), "--catalog", str(self.d), "--indices-only", "--out-dir", str(out)]), 0)
+        f = next(out.glob("targets-indices-*.json"))
+        verdicts = [r["indices"]["verdict"] for r in json.loads(f.read_text())]
+        self.assertEqual(verdicts, ["name-match", "listed", "unlisted"])
+
+    def test_indices_only_exit_3_when_a_source_failed(self):
+        t = self.d / "t3.txt"; t.write_text("http://example.org/\n")
+        out = self.d / "out3"
+        self.assertEqual(osc.main([str(t), "--catalog", str(self.d / "nope"), "--indices-only", "--out-dir", str(out)]), 3)
+
+    def test_indices_only_requires_a_source(self):
+        t = self.d / "t2.txt"; t.write_text("http://example.org/\n")
+        self.assertEqual(osc.main([str(t), "--indices-only"]), 2)
+        self.assertEqual(osc.main([str(t), "--indices", str(self.d / "missing.txt")]), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

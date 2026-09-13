@@ -1,0 +1,9 @@
+# Index sources, one per line: "Name | URL-or-path". Lines starting with # are ignored.
+# Remote sources are fetched once per run through the proxy; local paths are read from disk.
+# Add anything that lists onion addresses: a curated index, a public list, a saved page,
+# a markdown catalog, your own bookmarks.
+dark.fail | https://dark.fail/
+tor.taxi  | https://tor.taxi/
+ahmia     | https://ahmia.fi/onions/
+# a local catalog works the same way (also reachable via --catalog PATH):
+# deepdarkCTI | ~/src/deepdarkCTI
