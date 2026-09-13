@@ -19,6 +19,7 @@ response at all is OFFLINE. The nuance goes into "status_detail":
     ONLINE                                  response < 400, TLS chain OK (or plain HTTP)
     ONLINE (TLS not verified)               responded over TLS with chain verification off
     ONLINE (HTTP 4xx - access barrier)      401/402/403/407/429/451: login wall, WAF, rate limit
+    ONLINE (challenge page)                 2xx, but the body is a captcha / anti-DDoS / queue page
     ONLINE (HTTP 404 - missing resource)    server alive, path dead
     ONLINE (HTTP 5xx - server error)        application broken, host up
     OFFLINE                                 no response (see "error_class")
@@ -215,6 +216,29 @@ def looks_like_placeholder(title: str) -> bool:
     return bool(PLACEHOLDER_TITLE_RE.match(title.strip()))
 
 
+CHALLENGE_RE = re.compile(
+    r"captcha|anti-?ddos|ddos-?guard|prove (that )?you are (a )?human|are you (a )?human|"
+    r"verify you are (a )?human|access queue|waiting room",
+    re.IGNORECASE,
+)
+
+
+def looks_like_challenge(body: str) -> bool:
+    """Captcha / anti-DDoS / waiting-room page served with a 2xx. A living
+    server that will not show content yet — an access barrier, not a title
+    problem and not something JavaScript would fix."""
+    return bool(CHALLENGE_RE.search(body[:4096]))
+
+
+def is_html_response(resp: "Fetched") -> bool:
+    """Trust the server's Content-Type when it sent one; sniff the body only
+    when it did not. An HTML fragment (a bare <form>, say) has no <html> or
+    <title> to sniff for, yet is HTML."""
+    if resp.content_type:
+        return "html" in resp.content_type.lower()
+    return looks_like_html(resp.text)
+
+
 def looks_like_html(body: str) -> bool:
     """Cheap sniff of the first bytes: a JSON or plain-text answer has no <title>
     to begin with, and must not be flagged as "title only via JavaScript"."""
@@ -269,11 +293,13 @@ def extract_static_hints(html_text: str, soup: BeautifulSoup) -> dict:
 class Fetched:
     """Normalized response — whether it came from requests or from curl."""
 
-    def __init__(self, status_code: int, text: str, url: str, via: str = "requests"):
+    def __init__(self, status_code: int, text: str, url: str, via: str = "requests",
+                 content_type: str = ""):
         self.status_code = status_code
         self.text = text
         self.url = url
         self.via = via
+        self.content_type = content_type
 
 
 def classify_error(exc: Exception, uri: str = "") -> str:
@@ -286,18 +312,25 @@ def classify_error(exc: Exception, uri: str = "") -> str:
         # hidden-service descriptor; for clearnet, the exit could not resolve or
         # reach the host.
         return "hidden_service_unreachable" if is_onion(uri) else "host_unreachable_via_exit"
-    if "NewConnectionError" in text or "Failed to establish a new connection" in text:
-        # The TCP connection to the SOCKS proxy itself failed: Tor is not
-        # running or not listening where --proxy points. Nothing was measured.
-        return "proxy_unreachable"
     if "0x06" in text or "TTL expired" in text:
         return "circuit_failed"
-    if "0x05" in text or "Connection refused" in text:
+    if "0x05" in text:
+        # SOCKS 0x05 only. A bare "[Errno 111] Connection refused" with no SOCKS
+        # code is the proxy itself refusing — handled below as proxy_unreachable.
         return "connection_refused_by_destination"
     if "0x01" in text or "General SOCKS server failure" in text:
         # Tor answers "general failure" for an address it will not even try:
         # malformed .onion, wrong length, bad checksum, or a retired v2 name.
         return "invalid_onion_address" if is_onion(uri) else "socks_general_failure"
+    if ("Failed to establish a new connection" in text or "NewConnectionError" in text) \
+            and "0x" not in text:
+        # The TCP connection to the SOCKS proxy itself failed: Tor is not
+        # running or not listening where --proxy points. Nothing was measured.
+        # PySocks wraps every SOCKS reply in the same NewConnectionError text,
+        # so this must come AFTER the 0xNN checks — otherwise "invalid onion"
+        # and "connection refused by destination" would be misread as a dead
+        # proxy.
+        return "proxy_unreachable"
     if isinstance(exc, requests.exceptions.SSLError):
         return "tls_failed_even_unverified"
     if isinstance(exc, requests.exceptions.ConnectionError):
@@ -332,7 +365,7 @@ def fetch_via_curl(uri: str, cfg: Config) -> Fetched | None:
         "--socks5-hostname", cfg.proxy.split("//", 1)[1],
         "--max-time", str(cfg.timeout),
         "-A", TOR_BROWSER_UA,
-        "-w", f"\n{CURL_MARKER}%{{http_code}}|%{{url_effective}}",
+        "-w", f"\n{CURL_MARKER}%{{http_code}}|%{{content_type}}|%{{url_effective}}",
         uri,
     ]
     try:
@@ -343,14 +376,16 @@ def fetch_via_curl(uri: str, cfg: Config) -> Fetched | None:
     if CURL_MARKER not in out:
         return None
     body, meta = out.rsplit(CURL_MARKER, 1)
-    code_txt, _, final_url = meta.partition("|")
+    code_txt, _, rest = meta.partition("|")
+    content_type, _, final_url = rest.partition("|")
     try:
         code = int(code_txt.strip())
     except ValueError:
         return None
     if code == 0:  # curl got no response either
         return None
-    return Fetched(code, body, final_url.strip() or uri, via="curl-http2")
+    return Fetched(code, body, final_url.strip() or uri, via="curl-http2",
+                   content_type=content_type.strip())
 
 
 def fetch(uri: str, session: requests.Session, cfg: Config) -> tuple[Fetched, bool]:
@@ -367,13 +402,14 @@ def fetch(uri: str, session: requests.Session, cfg: Config) -> tuple[Fetched, bo
             # "TLS not verified" only makes sense if TLS exists: a plain-http
             # .onion has no certificate at all, and labeling it would be
             # inventing a fact about the target.
-            return Fetched(r.status_code, r.text, r.url), r.url.startswith("https://")
+            return (Fetched(r.status_code, r.text, r.url, content_type=r.headers.get("Content-Type", "")),
+                    r.url.startswith("https://"))
         try:
             r = session.get(uri, timeout=cfg.timeout, allow_redirects=True)
-            return Fetched(r.status_code, r.text, r.url), False
+            return Fetched(r.status_code, r.text, r.url, content_type=r.headers.get("Content-Type", "")), False
         except requests.exceptions.SSLError:
             r = session.get(uri, timeout=cfg.timeout, allow_redirects=True, verify=False)
-            return Fetched(r.status_code, r.text, r.url), True
+            return Fetched(r.status_code, r.text, r.url, content_type=r.headers.get("Content-Type", "")), True
     except (requests.exceptions.ConnectionError, requests.exceptions.SSLError) as e:
         # Second opinion via curl ONLY when the failure looks like HTTP/2 — i.e.
         # the server DID respond, in a protocol requests does not speak.
@@ -411,8 +447,16 @@ def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> di
         result["title_source"] = "html_title"
         result["needs_js_rendering"] = False
 
-        if not title and not looks_like_html(resp.text):
+        result["content_type"] = resp.content_type
+        if not title and not is_html_response(resp):
             result["title_source"] = "not_html"  # JSON / plain text: no title expected
+        elif looks_like_challenge(resp.text) and (not title or looks_like_placeholder(title)):
+            # Captcha / anti-DDoS wall with a 2xx: the server is up and is
+            # gating access. Label it as such instead of blaming JavaScript.
+            result["title_source"] = "challenge_page"
+            if resp.status_code < 400:
+                result["status_detail"] = "ONLINE (challenge page)" + (
+                    " [HTTP/2, measured via curl]" if resp.via == "curl-http2" else "")
         elif looks_like_placeholder(title):
             hints = extract_static_hints(resp.text, soup)
             result["static_hints"] = hints

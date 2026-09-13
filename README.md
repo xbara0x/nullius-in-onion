@@ -19,6 +19,7 @@ looks identical in a summary count:
 |---|---|---|---|
 | **TLS** | a `.onion` address already *is* the public key, so CA-signed certificates there are the exception; verification "fails" | OFFLINE | `ONLINE (TLS not verified)` — chain checking is off for `.onion` by policy; the label says what the tool did, not that the certificate is bad. On clearnet the chain **is** verified, and the request is retried unverified only when the handshake fails — so a clearnet `TLS not verified` means "live server, certificate did not validate" |
 | **HTTP ≥ 400** | a WAF, a login wall or a rate limiter answered 403/429 — a living server saying "not you" | OFFLINE | `ONLINE (HTTP 403 - access barrier)` |
+| **Challenge page** | a captcha / anti-DDoS / waiting-room page served with **200** — often an HTML fragment with no `<title>` at all | "online, no title" or "needs JS" | `ONLINE (challenge page)` — a living server gating access; JavaScript would not help |
 | **HTTP/2-only** | the server answered in HTTP/2 only; `requests` speaks HTTP/1.1 and sees binary frames (`BadStatusLine`) | OFFLINE | `ONLINE [HTTP/2, measured via curl]` |
 
 The rule is simple: **any response means ONLINE.** Only a target that sends
@@ -100,11 +101,15 @@ numeric suffix is added (`-2`, `-3`, …). File names use local time; the
 Every record carries `name`, `uri`, `checked_at`, `status` (`ONLINE`/`OFFLINE`),
 `status_detail` and `http_code`.
 
-ONLINE records add `title`, `title_source` (`html_title`; `meta_tag` when the
+ONLINE records add `content_type` (as sent by the server, empty if none),
+`title`, `title_source` (`html_title`; `meta_tag` when the
 `<title>` was a placeholder and `og:title`/`twitter:title` was used instead;
 `html_title_placeholder` when nothing better was found; `not_html` when the
 answer was not an HTML document at all — JSON, plain text — so no title was
-expected and the entry is *not* flagged for JavaScript), `tls_unverified`,
+expected and the entry is *not* flagged for JavaScript; `challenge_page` when
+the body is a captcha / anti-DDoS / queue page — the server's `Content-Type`
+decides what counts as HTML, and the body is only sniffed when there is no
+header), `tls_unverified`,
 `final_url` and `needs_js_rendering`. When the title looked like a placeholder
 they also carry `static_hints`: `meta_title`, `meta_description`, `api_hints`,
 `spa_state_markers` and `script_srcs` — reported, never fetched.
@@ -122,6 +127,26 @@ OFFLINE records have `http_code` and `title` set to `null`, plus `error_class`
 
 Anything else is a crash. Scripts and cron jobs should treat any non-zero as
 "do not trust this run".
+
+## Tests
+
+Offline unit tests (no Tor, no network) pin the behaviour that makes this tool
+different from a naive checker — status semantics, error classification with the
+real error strings PySocks produces, the HTTP/2 second-opinion branch,
+placeholder handling, output naming and report escaping:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+For a live check, run the example list (public services only):
+
+```bash
+python3 onion_status_check.py examples/targets.txt
+```
+
+Expected: every target `ONLINE` (the HTTPS onions with the `TLS not verified`
+caveat), `Controls: 3/3 online`, exit status `0`.
 
 ## A note on the User-Agent
 
