@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="878" height="654" viewBox="0 0 878 654" font-family="DejaVu Sans Mono, JetBrains Mono, Menlo, Consolas, monospace" font-size="14">
+<rect width="100%" height="100%" rx="8" fill="#0d1117"/>
+<circle cx="22" cy="18" r="5" fill="#ff5f56"/><circle cx="40" cy="18" r="5" fill="#ffbd2e"/><circle cx="58" cy="18" r="5" fill="#27c93f"/>
+<style>.l{opacity:0;animation:show .01s linear forwards}@keyframes show{to{opacity:1}}.c{animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}</style>
+<text class="l" x="18" y="42" fill="#d0d7de" style="animation-delay:0.00s" xml:space="preserve">$ python3 onion_status_check.py examples/targets.txt --indices examples/indices.txt</text>
+<text class="l" x="18" y="64" fill="#8b949e" style="animation-delay:1.00s" xml:space="preserve">Loading 3 index source(s) (3 remote, via socks5h://127.0.0.1:9050)...</text>
+<text class="l" x="18" y="86" fill="#d0d7de" style="animation-delay:1.45s" xml:space="preserve">  dark.fail: 36 hosts, 6 named entries, 1 file(s)</text>
+<text class="l" x="18" y="108" fill="#d0d7de" style="animation-delay:1.90s" xml:space="preserve">  tor.taxi: 56 hosts, 96 named entries, 1 file(s)</text>
+<text class="l" x="18" y="130" fill="#d0d7de" style="animation-delay:2.35s" xml:space="preserve">  ahmia: 8960 hosts, 0 named entries, 1 file(s)</text>
+<text class="l" x="18" y="152" fill="#8b949e" style="animation-delay:2.80s" xml:space="preserve">Checking 5 URLs via socks5h://127.0.0.1:9050 (timeout 25s)...</text>
+<text class="l" x="18" y="174" fill="#8b949e" style="animation-delay:3.25s" xml:space="preserve">[1/5] Tor Project (clearnet) (https://www.torproject.org/)</text>
+<text class="l" x="18" y="196" fill="#8b949e" style="animation-delay:4.45s" xml:space="preserve">[2/5] DuckDuckGo (onion) (https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/)</text>
+<text class="l" x="18" y="218" fill="#8b949e" style="animation-delay:5.65s" xml:space="preserve">[3/5] Ahmia (onion) (http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/)</text>
+<text class="l" x="18" y="240" fill="#8b949e" style="animation-delay:6.85s" xml:space="preserve">[4/5] Proton Mail (onion) (https://protonmailrmez3lotccipshtkleegetolb73fuirgj7r4o4vfu7ozyd.onion/)</text>
+<text class="l" x="18" y="262" fill="#8b949e" style="animation-delay:8.05s" xml:space="preserve">[5/5] BBC News (onion) (https://www.bbcweb3hytmzhn5d532owbu6oqadra5z3ar726vq5kgwwn6aucdccrad.onion/)</text>
+<text class="l" x="18" y="284" fill="#d0d7de" style="animation-delay:9.25s" xml:space="preserve"></text>
+<text class="l" x="18" y="306" fill="#8b949e" style="animation-delay:9.55s" xml:space="preserve">Measuring control targets (circuit validation)...</text>
+<text class="l" x="18" y="328" fill="#d0d7de" style="animation-delay:10.00s" xml:space="preserve"></text>
+<text class="l" x="18" y="350" fill="#3fb950" style="animation-delay:10.30s" xml:space="preserve">Done: 5 online (3 with caveat), 0 offline.</text>
+<text class="l" x="18" y="372" fill="#d29922" style="animation-delay:10.75s" xml:space="preserve">  caveat: DuckDuckGo (onion) — ONLINE (TLS not verified)</text>
+<text class="l" x="18" y="394" fill="#d29922" style="animation-delay:11.20s" xml:space="preserve">  caveat: Proton Mail (onion) — ONLINE (TLS not verified)</text>
+<text class="l" x="18" y="416" fill="#d29922" style="animation-delay:11.65s" xml:space="preserve">  caveat: BBC News (onion) — ONLINE (TLS not verified)</text>
+<text class="l" x="18" y="438" fill="#3fb950" style="animation-delay:12.10s" xml:space="preserve">Indices: 4 listed, 0 name-match, 1 unlisted.</text>
+<text class="l" x="18" y="460" fill="#58a6ff" style="animation-delay:12.55s" xml:space="preserve">  listed: Tor Project (clearnet) -&gt; dark.fail, tor.taxi</text>
+<text class="l" x="18" y="482" fill="#58a6ff" style="animation-delay:13.00s" xml:space="preserve">  listed: DuckDuckGo (onion) -&gt; dark.fail, tor.taxi</text>
+<text class="l" x="18" y="504" fill="#58a6ff" style="animation-delay:13.45s" xml:space="preserve">  listed: Ahmia (onion) -&gt; ahmia</text>
+<text class="l" x="18" y="526" fill="#58a6ff" style="animation-delay:13.90s" xml:space="preserve">  listed: Proton Mail (onion) -&gt; dark.fail, tor.taxi</text>
+<text class="l" x="18" y="548" fill="#3fb950" style="animation-delay:14.35s" xml:space="preserve">Controls: 3/3 online.</text>
+<text class="l" x="18" y="570" fill="#8b949e" style="animation-delay:14.80s" xml:space="preserve">JSON: results/targets-20260913-2045.json</text>
+<text class="l" x="18" y="592" fill="#8b949e" style="animation-delay:15.25s" xml:space="preserve">Controls: results/targets-20260913-2045-controls.json</text>
+<text class="l" x="18" y="614" fill="#8b949e" style="animation-delay:15.70s" xml:space="preserve">HTML: results/targets-20260913-2045.html</text>
+<rect class="c" x="18" y="622" width="8" height="16" fill="#d0d7de"/>
+</svg>

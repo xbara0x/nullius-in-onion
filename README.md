@@ -12,24 +12,11 @@ cannot be trusted.
 
 **Status:** v0.2 — working and tested; the JSON layout may still change.
 
-```
-$ python3 onion_status_check.py my-list.txt --indices examples/indices.txt
+<p align="center">
+  <img src="docs/demo.gif" alt="onion-status-check running on the example list: three index sources load, five targets are measured, four are listed by dark.fail / tor.taxi / ahmia, controls 3/3" width="880">
+</p>
 
-Loading 3 index source(s) (3 remote, via socks5h://127.0.0.1:9050)...
-  dark.fail: 36 hosts, 9 named entries, 1 file(s)
-  tor.taxi: 56 hosts, 96 named entries, 1 file(s)
-  ahmia: 8960 hosts, 0 named entries, 1 file(s)
-Checking 4 URLs via socks5h://127.0.0.1:9050 (timeout 25s)...
-[1/4] VormWeb (http://volkanc…onion/)
-...
-Done: 3 online (1 with caveat), 1 offline.
-  caveat: Some Forum — ONLINE (HTTP 403 - access barrier)
-Indices: 2 listed, 1 name-match, 1 unlisted.
-  listed: VormWeb -> tor.taxi
-  name-match: Nexus mirror -> deepdarkCTI: NEXUS <nexus2bmba34euohk3xo7og2…>
-Controls: 3/3 online.
-JSON: results/my-list-20260913-1800.json
-```
+<sub>A real run on <code>examples/targets.txt</code> (public services only), ~1 min wall-clock compressed to 20 s. Also as <a href="docs/demo.svg">SVG</a>.</sub>
 
 ---
 
@@ -63,6 +50,31 @@ https://dark.fail/
 ## Reading a result
 
 Every target ends up in one of two states, and the state comes with a reason.
+This is the whole decision, per target:
+
+```mermaid
+flowchart LR
+    GET([one plain GET<br/>through Tor]) --> A{any response?}
+    A -- yes --> ON[ONLINE]
+    A -- no --> OFF[OFFLINE]
+    ON --> D{what kind?}
+    D --> D1["2xx, chain ok<br/><b>ONLINE</b>"]
+    D --> D2["https .onion / bad clearnet cert<br/><b>TLS not verified</b>"]
+    D --> D3["401 403 407 429 451<br/><b>access barrier</b>"]
+    D --> D4["captcha · anti-DDoS · queue<br/><b>challenge page</b>"]
+    D --> D5["404 · 5xx<br/><b>missing resource · server error</b>"]
+    A -. "BadStatusLine =<br/>HTTP/2 signature" .-> CURL[curl --http2<br/>second opinion] -.-> A
+    OFF --> E["error_class:<br/>hidden_service_unreachable · timeout ·<br/>invalid_onion_address · proxy_unreachable · …"]
+    ON & OFF --> C{controls<br/>3/3 up?}
+    C -- yes --> X0[exit 0]
+    C -- no --> X3["exit 3 — do not trust<br/>the negatives"]
+    classDef good fill:#dafbe1,stroke:#1a7f37,color:#1a7f37
+    classDef bad fill:#ffebe9,stroke:#cf222e,color:#cf222e
+    classDef warn fill:#fff8c5,stroke:#9a6700,color:#9a6700
+    class ON,D1,X0 good
+    class OFF,E,X3 bad
+    class D2,D3,D4,D5 warn
+```
 
 **`ONLINE`** — the server answered. Any answer counts: a 403, a captcha page, a
 self-signed certificate. `status_detail` says what kind of answer it was:
@@ -142,6 +154,30 @@ my catalog  | ~/src/deepdarkCTI
 Remote sources are fetched **once per run**, through the same Tor proxy as
 everything else. Local paths (a file or a whole directory tree) are read from
 disk. `--catalog PATH` is a shortcut for one local source.
+
+```mermaid
+flowchart LR
+    subgraph sources ["index sources — loaded once per run"]
+        direction TB
+        S1["dark.fail<br/><i>remote, via Tor</i>"]
+        S2["tor.taxi<br/><i>remote, via Tor</i>"]
+        S3["ahmia.fi/onions<br/><i>remote, via Tor</i>"]
+        S4["~/src/deepdarkCTI<br/><i>local tree</i>"]
+    end
+    sources --> IDX[(hosts + names<br/>per source)]
+    T([each target:<br/>host · label · measured title]) --> Q1{exact host<br/>in any source?}
+    IDX --> Q1
+    Q1 -- yes --> L["<b>listed</b><br/>listed_in: who, where, line"]
+    Q1 -- no --> Q2{same normalized<br/>name in any source?}
+    Q2 -- yes --> N["<b>name-match</b><br/>second address of a known entity:<br/>mirror or clone — <i>your call</i>"]
+    Q2 -- no --> U["<b>unlisted</b><br/>meaningful only if no<br/>source failed to load"]
+    classDef good fill:#dafbe1,stroke:#1a7f37,color:#1a7f37
+    classDef warn fill:#fff8c5,stroke:#9a6700,color:#9a6700
+    classDef dim fill:#f6f8fa,stroke:#8b949e,color:#656d76
+    class L good
+    class N warn
+    class U dim
+```
 
 ```bash
 # triage a list before spending a second of Tor time on the targets
@@ -245,6 +281,11 @@ results/<list>-indices-<YYYYmmdd-HHMM>.json    with --indices-only
 Nothing is ever overwritten: a second run in the same minute gets a `-2`
 suffix. File names use local time; `checked_at` inside the records is UTC.
 
+The HTML report groups targets by what happened to them and carries the
+index verdicts inline:
+
+<p align="center"><img src="docs/report.png" alt="HTML report: online targets with title, online with caveat (TLS not verified), offline, circuit controls — each line with its 'listed by' sources" width="820"></p>
+
 ### Fields
 
 Every record: `name`, `uri`, `checked_at`, `status`, `status_detail`,
@@ -289,6 +330,14 @@ Offline, no Tor needed. They pin the behaviour that makes this tool different
 from a naive checker — including error classification against the real error
 strings PySocks produces, the HTTP/2 branch, challenge and placeholder
 handling, index matching and its known false positives.
+
+### Regenerating the demo
+
+`docs/demo.gif` and `docs/demo.svg` are rendered from a real transcript by
+`docs/make_demo.py` (Pillow only); `docs/report.png` is a headless-Chromium
+screenshot of the HTML report from the same run. Both use
+`examples/targets.txt` — public services only — so nothing in the images is
+anyone's private list.
 
 ---
 

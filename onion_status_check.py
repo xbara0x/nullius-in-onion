@@ -700,20 +700,30 @@ def write_html_report(results: list[dict], out_path: Path,
     resolved = [r for r in online
                 if not r.get("needs_js_rendering") and r.get("status_detail", "ONLINE") == "ONLINE"]
 
+    css = ("body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px;"
+           "margin:2rem auto;padding:0 1rem;color:#1f2328;line-height:1.5}"
+           "h1{font-size:1.15rem;border-bottom:1px solid #d0d7de;padding-bottom:.3rem;margin-top:2rem}"
+           "ol,ul{padding-left:1.4rem}li{margin:.35rem 0;word-break:break-all}"
+           "a{color:#0969da}code,.lbl{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}"
+           ".lbl{background:#fff8c5;border-radius:4px;padding:0 .3em}"
+           ".ok{color:#1a7f37}.warn{color:#9a6700}.bad{color:#cf222e}.dim{color:#656d76}"
+           ".src{background:#ddf4ff;border-radius:4px;padding:0 .3em}")
     lines = ["<!doctype html><html><head><meta charset='utf-8'>"
-             "<title>onion-status-check report</title></head><body>"]
+             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+             f"<title>onion-status-check report</title><style>{css}</style></head><body>",
+             f"<p class='dim'>onion-status-check — {len(results)} target(s)</p>"]
 
     def cat_note(r: dict) -> str:
         ix = r.get("indices")
         if not ix:
             return ""
         if ix["verdict"] == "listed":
-            who = ", ".join(sorted({_esc(m["source"]) for m in ix["listed_in"]}))
+            who = " ".join(f"<span class='src'>{_esc(m)}</span>" for m in sorted({m["source"] for m in ix["listed_in"]}))
             return f" — <b>listed by</b> {who}"
         if ix["verdict"] == "name-match":
-            names = ", ".join(f"{_esc(m['source'])}: {_esc(m['name'])}" for m in ix["name_matches"][:3])
-            return f" — <b>name-match</b> ({names})"
-        return " — unlisted"
+            names = ", ".join(f"<span class='src'>{_esc(m['source'])}</span> {_esc(m['name'])}" for m in ix["name_matches"][:3])
+            return f" — <b>name-match</b> {names}"
+        return " — <span class='dim'>unlisted</span>"
 
     lines.append(f"<h1>Online, title resolved ({len(resolved)})</h1><ol>")
     for r in resolved:
@@ -740,20 +750,20 @@ def write_html_report(results: list[dict], out_path: Path,
     lines.append("<p>These responded. They are <b>not</b> offline.</p><ol>")
     for r in caveat:
         title = r.get("title") or "(no title)"
-        lines.append(f"<li><b>{_esc(r.get('status_detail', ''))}</b> — {_esc(r['name'])} — "
-                     f"{_esc(r['uri'])} — title: \"{_esc(title)}\"</li>")
+        lines.append(f"<li><span class='lbl warn'>{_esc(r.get('status_detail', ''))}</span> {_esc(r['name'])} — "
+                     f"{_esc(r['uri'])} — title: \"{_esc(title)}\"{cat_note(r)}</li>")
     lines.append("</ol>")
 
     lines.append(f"<h1>Offline ({len(offline)})</h1><p>No response at all.</p><ol>")
     for r in offline:
         detail = r.get("error_class") or r.get("error") or "no detail"
-        lines.append(f"<li>{_esc(r['name'])} — {_esc(r['uri'])} — {_esc(detail)}</li>")
+        lines.append(f"<li><span class='lbl bad'>{_esc(detail)}</span> {_esc(r['name'])} — {_esc(r['uri'])}</li>")
     lines.append("</ol>")
 
     if controls:
         ok = sum(1 for c in controls if c["status"] == "ONLINE")
-        verdict = ("Tor circuit validated" if ok == len(controls)
-                   else "<b>CIRCUIT SUSPECT — do not record anything as dead from this run</b>")
+        verdict = ("<span class='ok'>Tor circuit validated</span>" if ok == len(controls)
+                   else "<b class='bad'>CIRCUIT SUSPECT — do not record anything as dead from this run</b>")
         lines.append(f"<h1>Circuit controls ({ok}/{len(controls)}) — {verdict}</h1><ul>")
         for c in controls:
             lines.append(f"<li>{_esc(c['name'])} — {_esc(c.get('status_detail', c['status']))}</li>")
