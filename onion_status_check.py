@@ -66,6 +66,8 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+__version__ = "0.2.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
 DEFAULT_DELAY = (2.0, 5.0)  # seconds between requests; do not look like an aggressive crawler
@@ -790,7 +792,6 @@ def unique_base(out_dir: Path, stem: str) -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="onion_status_check.py",
         description="Is it up, and who already lists it? One plain GET per .onion/clearnet target "
                     "through Tor (status code + <title>, circuit controls at the end), plus an optional "
                     "cross-check against any index sources you name. Details: README.md",
@@ -798,6 +799,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                'sources file (--indices): one per line, "Name | URL-or-path". '
                'Lines starting with # are ignored.',
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("targets", type=Path,
                    help='text file, one target per line: "Name | URL" or just "URL"')
     p.add_argument("--out-dir", type=Path, default=Path("results"),

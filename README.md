@@ -1,5 +1,7 @@
 # onion-status-check
 
+[![tests](https://github.com/xbara0x/onion-status-check/actions/workflows/tests.yml/badge.svg)](https://github.com/xbara0x/onion-status-check/actions/workflows/tests.yml)
+
 Answers two questions about a list of `.onion` (or clearnet) addresses, honestly:
 
 1. **Is it up?** — one plain GET through Tor, status code and page title, nothing else.
@@ -10,7 +12,8 @@ It never runs JavaScript, never logs in, never crawls, and never decides for
 you: it reports, with the reasons, and tells you when its own measurement
 cannot be trusted.
 
-**Status:** v0.2 — working and tested; the JSON layout may still change.
+**Status:** v0.2.0 — working and tested; the JSON layout may still change,
+and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
 
 <p align="center">
   <img src="docs/demo.gif" alt="onion-status-check running on the example list: three index sources load, five targets are measured, four are listed by dark.fail / tor.taxi / ahmia, controls 3/3" width="880">
@@ -30,6 +33,10 @@ Arch: install `tor`, then `systemctl enable --now tor`), Python 3.10+, and
 pip install -r requirements.txt
 python3 onion_status_check.py examples/targets.txt
 ```
+
+Or install it as a command — `pipx install git+https://github.com/xbara0x/onion-status-check`
+(or `pip install .` from a clone) — and run `onion-status-check examples/targets.txt`.
+Both forms are the same program.
 
 The example list has public services only. You should see every target
 `ONLINE` (the HTTPS ones with a `TLS not verified` note), `Controls: 3/3
@@ -268,6 +275,7 @@ a listed entity, in 0.5 s of matching.
 | `--indices FILE` | — | sources list, one per line `Name \| URL-or-path` |
 | `--catalog PATH …` | — | add a local file or tree as an index source |
 | `--indices-only` | off | cross-check only; measure no target |
+| `--version` | — | print the version and exit |
 
 ### Files
 

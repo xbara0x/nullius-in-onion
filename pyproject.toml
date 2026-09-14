@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onion-status-check"
+dynamic = ["version"]
+description = "Honest liveness checks for .onion URLs over Tor — any response means ONLINE; circuit controls tell a dead batch from a broken circuit."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "xbara0x", email = "xbara0x@pm.me" }]
+keywords = ["tor", "onion", "dark-web", "osint", "threat-intelligence", "liveness-check"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Security",
+]
+dependencies = [
+  "requests[socks]>=2.31",
+  "beautifulsoup4>=4.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/xbara0x/onion-status-check"
+Changelog = "https://github.com/xbara0x/onion-status-check/blob/main/CHANGELOG.md"
+Issues = "https://github.com/xbara0x/onion-status-check/issues"
+
+[project.scripts]
+onion-status-check = "onion_status_check:main"
+
+[tool.setuptools]
+py-modules = ["onion_status_check"]
+
+[tool.setuptools.dynamic]
+version = { attr = "onion_status_check.__version__" }
