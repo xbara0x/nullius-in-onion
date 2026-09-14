@@ -7,6 +7,39 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-13
+
+### Added
+- **Diff between runs.** `diff OLD.json NEW.json` compares two result files
+  of the same list and reports what moved: went OFFLINE, came back, changed
+  (`status_detail`, `http_code`, `title`, `title_source` while ONLINE;
+  `error_class` while OFFLINE; the `indices` verdict when both runs had
+  indices), added, removed, unchanged. Targets are matched by address —
+  scheme and host case-folded, trailing slash ignored — so a hand-edited
+  list is not churn; a name edit is not a change. Each side's
+  `-controls.json` is read from next to the file: a failed control on the
+  new side marks "went OFFLINE" as suspect (and on the old side, "came
+  back"), the report says so first, and the exit status is `3` instead of
+  `1`. A run with no controls file is unverified, not suspect. `--json PATH`
+  writes the diff as a file, never overwriting one that exists.
+- `--diff-previous`: after a run, compare it with the most recent earlier run
+  of the same list in `--out-dir` (by the stamp in the file name; controls,
+  diff and `--indices-only` files are not candidates) and write
+  `<base>-diff.json` next to the results. The run's exit status stays the
+  run's.
+- Exit status `1` — `diff` only: differences found and both runs
+  trustworthy.
+- 9 offline tests for the diff: identity normalization, every bucket,
+  indices verdict changes, suspect controls, sidecar loading and rejection of
+  non-measurement files, previous-run selection, `--json` never overwriting,
+  `--diff-previous` end to end.
+
+### Fixed
+- A `<title>` split over several source lines was recorded with the newline
+  inside it. Whitespace is now collapsed at capture, as a browser renders it,
+  and the diff collapses it on both sides so files written before 0.3.0 do
+  not show a whitespace-only "change".
+
 ## [0.2.0] — 2026-09-13
 
 ### Added
@@ -100,6 +133,7 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/onion-status-check/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/xbara0x/onion-status-check/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/xbara0x/onion-status-check/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xbara0x/onion-status-check/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xbara0x/onion-status-check/releases/tag/v0.1.0

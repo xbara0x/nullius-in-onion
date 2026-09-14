@@ -8,7 +8,9 @@ naming, and HTML escaping in the report.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -181,6 +183,8 @@ class CheckOneOffline(unittest.TestCase):
         r = osc.check_one("n", "http://x.onion/", self._session(text="<html><title>Hi</title></html>"), self.cfg)
         self.assertEqual((r["status"], r["http_code"], r["title"], r["title_source"], r["needs_js_rendering"]),
                          ("ONLINE", 200, "Hi", "html_title", False))
+        r = osc.check_one("n", "http://x.onion/", self._session(text="<html><title>Ahmia —\n   Search Tor\n</title></html>"), self.cfg)
+        self.assertEqual(r["title"], "Ahmia — Search Tor")  # whitespace collapsed, as a browser renders it
 
     def test_content_type_beats_sniff(self):
         # An HTML fragment with no <html>/<title>: the server said text/html, so it IS html.
@@ -420,6 +424,146 @@ class IndexCrossCheck(unittest.TestCase):
         t = self.d / "t2.txt"; t.write_text("http://example.org/\n")
         self.assertEqual(osc.main([str(t), "--indices-only"]), 2)
         self.assertEqual(osc.main([str(t), "--indices", str(self.d / "missing.txt")]), 2)
+
+
+class DiffBetweenRuns(unittest.TestCase):
+    @staticmethod
+    def rec(name, uri, status="ONLINE", **kw):
+        r = {"name": name, "uri": uri, "checked_at": "2026-09-13T20:00:00+00:00", "status": status,
+             "status_detail": "ONLINE" if status == "ONLINE" else "OFFLINE",
+             "http_code": 200 if status == "ONLINE" else None,
+             "title": "T" if status == "ONLINE" else None, "title_source": "html_title"}
+        if status == "OFFLINE":
+            r["error_class"] = "timeout"
+        r.update(kw)
+        return r
+
+    @staticmethod
+    def mkrun(records, controls=None, file="x.json"):
+        return {"file": file, "targets": len(records), "checked_at": records[0]["checked_at"] if records else None,
+                "controls": controls, "records": records}
+
+    def test_record_key_normalizes_identity(self):
+        k = osc.record_key
+        self.assertEqual(k("http://ABC.onion/"), k("http://abc.onion"))
+        self.assertEqual(k("https://x.example/a/#frag"), k("https://x.example/a"))
+        self.assertNotEqual(k("http://a.onion/x"), k("http://a.onion/y"))
+        self.assertNotEqual(k("http://a.onion/?q=1"), k("http://a.onion/"))
+        self.assertNotEqual(k("http://a.onion/"), k("https://a.onion/"))
+
+    def test_transitions(self):
+        old = self.mkrun([self.rec("A", "http://a.onion/"), self.rec("B", "http://b.onion/", "OFFLINE"),
+                        self.rec("C", "http://c.onion/"), self.rec("D", "http://d.onion/", "OFFLINE"),
+                        self.rec("E", "http://e.onion/"), self.rec("G", "http://g.onion/")])
+        new = self.mkrun([self.rec("A", "http://A.onion", "OFFLINE", error_class="host_unreachable"),
+                        self.rec("B", "http://b.onion/", status_detail="ONLINE (TLS not verified)"),
+                        self.rec("C", "http://c.onion/", title="Seized", status_detail="ONLINE (HTTP 403 - access barrier)", http_code=403),
+                        self.rec("D", "http://d.onion/", "OFFLINE", error_class="invalid_onion_address"),
+                        self.rec("E", "http://e.onion/"), self.rec("F", "http://f.onion/")])
+        d = osc.diff_runs(old, new)
+        self.assertEqual(d["summary"], {"went_offline": 1, "came_back": 1, "changed": 2, "added": 1,
+                                        "removed": 1, "unchanged": 1})
+        self.assertEqual(d["differences"], 6)
+        self.assertEqual(d["went_offline"][0]["new_error_class"], "host_unreachable")
+        self.assertEqual(d["came_back"][0]["new_detail"], "ONLINE (TLS not verified)")
+        c = {r["name"]: [(x["field"], x["old"], x["new"]) for x in r["changes"]] for r in d["changed"]}
+        self.assertEqual(c["C"], [("detail", "ONLINE", "ONLINE (HTTP 403 - access barrier)"), ("http", 200, 403),
+                                  ("title", "T", "Seized")])
+        self.assertEqual(c["D"], [("error", "timeout", "invalid_onion_address")])
+        self.assertEqual([r["name"] for r in d["added"]], ["F"])
+        self.assertEqual([r["name"] for r in d["removed"]], ["G"])
+        self.assertFalse(d["old_suspect"] or d["new_suspect"])
+        self.assertEqual(osc.diff_exit_code(d), 1)
+
+    def test_indices_verdict_change_is_a_change(self):
+        ix_old = {"verdict": "unlisted", "listed_in": [], "name_matches": [], "sources_failed": []}
+        ix_new = {"verdict": "listed", "listed_in": [{"source": "tor.taxi"}], "name_matches": [], "sources_failed": []}
+        d = osc.diff_runs(self.mkrun([self.rec("A", "http://a.onion/", indices=ix_old)]),
+                          self.mkrun([self.rec("A", "http://a.onion/", indices=ix_new)]))
+        self.assertEqual(d["changed"][0]["changes"],
+                         [{"field": "indices", "old": "unlisted", "new": "listed", "listed_in": ["tor.taxi"]}])
+        self.assertIn('indices: "unlisted" -> "listed" (tor.taxi)', osc.render_diff(d))
+
+    def test_identical_runs_exit_0_and_say_so(self):
+        recs = [self.rec("A", "http://a.onion/", title="Ahmia —\n      Search"), self.rec("B", "http://b.onion/", "OFFLINE")]
+        same = [self.rec("A", "http://a.onion/", title="Ahmia — Search"), self.rec("B", "http://b.onion/", "OFFLINE")]
+        d = osc.diff_runs(self.mkrun(recs), self.mkrun(same))  # whitespace inside a title is not a change
+        self.assertEqual(d["differences"], 0)
+        self.assertEqual(osc.diff_exit_code(d), 0)
+        self.assertIn("No differences: 2 targets", osc.render_diff(d))
+
+    def test_failed_controls_make_the_diff_suspect(self):
+        old = self.mkrun([self.rec("A", "http://a.onion/")], controls={"online": 3, "total": 3})
+        new = self.mkrun([self.rec("A", "http://a.onion/", "OFFLINE")], controls={"online": 1, "total": 3})
+        d = osc.diff_runs(old, new)
+        self.assertTrue(d["new_suspect"]); self.assertFalse(d["old_suspect"])
+        self.assertEqual(osc.diff_exit_code(d), 3)
+        text = osc.render_diff(d)
+        self.assertIn("controls 1/3 — SUSPECT", text)
+        self.assertIn("WARNING: the new run's controls failed", text)
+        # a run with no controls file is unverified, not suspect
+        self.assertFalse(osc.run_is_suspect(self.mkrun([], controls=None)))
+
+    def test_load_run_reads_controls_sidecar_and_rejects_other_files(self):
+        d = Path(tempfile.mkdtemp())
+        f = d / "t-20260913-1200.json"
+        f.write_text(json.dumps([self.rec("A", "http://a.onion/")]))
+        (d / "t-20260913-1200-controls.json").write_text(json.dumps([self.rec("c1", "http://c.onion/"),
+                                                                     self.rec("c2", "http://d.onion/", "OFFLINE")]))
+        run = osc.load_run(f)
+        self.assertEqual(run["controls"], {"online": 1, "total": 2})
+        self.assertEqual(run["checked_at"], "2026-09-13T20:00:00+00:00")
+        ix = d / "t-indices-20260913-1200.json"
+        ix.write_text(json.dumps([{"name": "A", "uri": "http://a.onion/", "indices": {"verdict": "listed"}}]))
+        with self.assertRaises(ValueError):
+            osc.load_run(ix)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(osc.main(["diff", str(ix), str(f)]), 2)
+            self.assertEqual(osc.main(["diff", str(d / "missing.json"), str(f)]), 2)
+
+    def test_previous_run_picks_the_latest_of_the_same_list_only(self):
+        d = Path(tempfile.mkdtemp())
+        for name in ("t-20260913-1200.json", "t-20260913-1200-2.json", "t-20260913-1159.json",
+                     "t-20260913-1200-controls.json", "t-20260913-1200-diff.json",
+                     "t-indices-20260913-1300.json", "t-extra-20260913-1400.json", "t-20260913-1500.json"):
+            (d / name).write_text("[]")
+        self.assertEqual(osc.previous_run(d, "t").name, "t-20260913-1500.json")
+        self.assertEqual(osc.previous_run(d, "t", exclude=d / "t-20260913-1500.json").name, "t-20260913-1200-2.json")
+        self.assertEqual(osc.previous_run(d, "t-extra").name, "t-extra-20260913-1400.json")
+        self.assertIsNone(osc.previous_run(d, "nothing"))
+
+    def test_diff_main_writes_json_and_never_overwrites(self):
+        d = Path(tempfile.mkdtemp())
+        a = d / "t-20260913-1200.json"; b = d / "t-20260913-1300.json"
+        a.write_text(json.dumps([self.rec("A", "http://a.onion/")]))
+        b.write_text(json.dumps([self.rec("A", "http://a.onion/", "OFFLINE")]))
+        out = d / "diff.json"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(osc.main(["diff", str(a), str(b), "--json", str(out)]), 1)
+            self.assertEqual(osc.main(["diff", str(a), str(b), "--json", str(out)]), 2)
+        self.assertIn("Went OFFLINE (1)", buf.getvalue())
+        self.assertEqual(json.loads(out.read_text())["summary"]["went_offline"], 1)
+
+    def test_diff_previous_after_a_run(self):
+        d = Path(tempfile.mkdtemp())
+        t = d / "list.txt"; t.write_text("A | http://a.onion/\n")
+        out = d / "out"
+        calls = iter([self.rec("A", "http://a.onion/"), self.rec("A", "http://a.onion/", "OFFLINE")])
+        original = osc.check_one
+        osc.check_one = lambda name, uri, session, cfg: next(calls)
+        try:
+            args = [str(t), "--out-dir", str(out), "--no-controls", "--no-html", "--delay", "0", "0", "--diff-previous"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(osc.main(args), 0)      # first run: nothing to compare with
+                self.assertEqual(list(out.glob("*-diff.json")), [])
+                (out / next(out.glob("list-*.json")).name).rename(out / "list-20260913-0001.json")  # make it older
+                self.assertEqual(osc.main(args), 0)      # run exit code is the run's, not the diff's
+            diff = json.loads(next(out.glob("list-*-diff.json")).read_text())
+            self.assertEqual(diff["summary"]["went_offline"], 1)
+            self.assertEqual(Path(diff["old"]["file"]).name, "list-20260913-0001.json")
+        finally:
+            osc.check_one = original
 
 
 if __name__ == "__main__":

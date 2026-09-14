@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-onion-status-check — is it up, and who already lists it?
+onion-status-check — is it up, who already lists it, and what changed?
 
 For each target: ONE plain HTTP GET through the local Tor SOCKS proxy, then
 the status code and the page <title>. No JavaScript, no images, no forms, no
 login, no crawling. Optionally, every target is also looked up in a set of
 index sources (curated lists, crawler lists, local catalogs) to say who
-already lists that address or that name.
+already lists that address or that name. `diff` compares two result files
+of the same list and reports what moved, with both runs' circuit controls
+in view.
 
 The full explanation — why a naive checker lies, what every label and error
 class means, how index matching works, exit codes — lives in README.md. What
@@ -66,7 +68,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.2.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.3.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -643,7 +645,9 @@ def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> di
         result["tls_unverified"] = tls_unverified
         result["final_url"] = resp.url
         soup = BeautifulSoup(resp.text, "html.parser")
-        title = soup.title.get_text(strip=True) if soup.title else ""
+        # Inner whitespace collapsed, as a browser would render it: a <title>
+        # split over two source lines is not a different title.
+        title = " ".join(soup.title.get_text().split()) if soup.title else ""
         result["title"] = title
         result["title_source"] = "html_title"
         result["needs_js_rendering"] = False
@@ -776,6 +780,234 @@ def write_html_report(results: list[dict], out_path: Path,
 
 
 # --------------------------------------------------------------------------- #
+# Diff between two runs
+# --------------------------------------------------------------------------- #
+
+RESULT_FILE_RE = re.compile(r"^(?P<stem>.+)-(?P<stamp>\d{8}-\d{4})(?:-(?P<n>\d+))?\.json$")
+
+
+def record_key(uri: str) -> str:
+    """Identity of a target across runs: scheme and host lowercased, no
+    trailing slash, no fragment. "http://X.onion" and "http://x.onion/" are
+    the same target; a list edited by hand must not show up as churn."""
+    u = urlparse(uri.strip())
+    return f"{u.scheme.lower()}://{u.netloc.lower()}{u.path.rstrip('/')}" + (f"?{u.query}" if u.query else "")
+
+
+def controls_sidecar(path: Path) -> Path:
+    return path.with_name(path.name[:-len(".json")] + "-controls.json")
+
+
+def load_run(path: Path) -> dict:
+    """A results file, plus its -controls.json when it sits next to it.
+    Raises ValueError for anything that is not a list of measurement records
+    (an --indices-only file, a controls file, a diff)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not all(isinstance(r, dict) and "status" in r and "uri" in r for r in data):
+        raise ValueError(f"{path}: not a measurement file (a list of records with status and uri)")
+    run = {"file": str(path), "targets": len(data), "checked_at": None, "controls": None, "records": data}
+    stamps = sorted(r["checked_at"] for r in data if r.get("checked_at"))
+    if stamps:
+        run["checked_at"] = stamps[0]
+    sidecar = controls_sidecar(path)
+    if sidecar.is_file():
+        controls = json.loads(sidecar.read_text(encoding="utf-8"))
+        run["controls"] = {"online": sum(1 for c in controls if c.get("status") == "ONLINE"),
+                           "total": len(controls)}
+    return run
+
+
+def run_is_suspect(run: dict) -> bool:
+    """A run whose circuit controls failed: its OFFLINE verdicts may be the
+    circuit, not the targets. A run without a controls file is not suspect —
+    it is simply unverified, and the report says so."""
+    c = run["controls"]
+    return bool(c) and c["online"] < c["total"]
+
+
+def _online_fields(r: dict) -> list[tuple[str, object]]:
+    title = r.get("title")
+    if isinstance(title, str):
+        title = " ".join(title.split())  # files written before 0.3.0 may carry a newline inside a title
+    return [("detail", r.get("status_detail")), ("http", r.get("http_code")),
+            ("title", title), ("title_source", r.get("title_source"))]
+
+
+def diff_runs(old: dict, new: dict) -> dict:
+    """What changed between two runs, keyed by target identity. Records that
+    exist in both are compared; the rest are added or removed. Circuit
+    verdicts of both runs travel with the result so that a reader (or a
+    script) knows which side of a transition can be trusted."""
+    old_by = {record_key(r["uri"]): r for r in old["records"]}
+    new_by = {record_key(r["uri"]): r for r in new["records"]}
+    out: dict = {
+        "old": {k: old[k] for k in ("file", "checked_at", "targets", "controls")},
+        "new": {k: new[k] for k in ("file", "checked_at", "targets", "controls")},
+        "old_suspect": run_is_suspect(old),
+        "new_suspect": run_is_suspect(new),
+        "went_offline": [], "came_back": [], "changed": [], "added": [], "removed": [],
+        "unchanged": 0,
+    }
+    for key, n in new_by.items():
+        o = old_by.get(key)
+        if o is None:
+            out["added"].append({"name": n["name"], "uri": n["uri"], "status": n["status"],
+                                 "status_detail": n.get("status_detail"), "error_class": n.get("error_class")})
+            continue
+        if o["status"] != n["status"]:
+            if n["status"] == "OFFLINE":
+                out["went_offline"].append({"name": n["name"], "uri": n["uri"],
+                                            "old_detail": o.get("status_detail") or o["status"],
+                                            "new_error_class": n.get("error_class")})
+            else:
+                out["came_back"].append({"name": n["name"], "uri": n["uri"],
+                                         "old_error_class": o.get("error_class"),
+                                         "new_detail": n.get("status_detail") or n["status"]})
+            continue
+        changes = []
+        if n["status"] == "ONLINE":
+            for (field, ov), (_, nv) in zip(_online_fields(o), _online_fields(n)):
+                if ov != nv:
+                    changes.append({"field": field, "old": ov, "new": nv})
+        elif o.get("error_class") != n.get("error_class"):
+            changes.append({"field": "error", "old": o.get("error_class"), "new": n.get("error_class")})
+        if "indices" in o and "indices" in n:
+            ov, nv = o["indices"].get("verdict"), n["indices"].get("verdict")
+            if ov != nv:
+                who = sorted({m["source"] for m in n["indices"].get("listed_in", [])})
+                changes.append({"field": "indices", "old": ov, "new": nv, "listed_in": who})
+        if changes:
+            out["changed"].append({"name": n["name"], "uri": n["uri"], "status": n["status"], "changes": changes})
+        else:
+            out["unchanged"] += 1
+    for key, o in old_by.items():
+        if key not in new_by:
+            out["removed"].append({"name": o["name"], "uri": o["uri"], "status": o["status"],
+                                   "status_detail": o.get("status_detail"), "error_class": o.get("error_class")})
+    out["summary"] = {k: len(out[k]) for k in ("went_offline", "came_back", "changed", "added", "removed")}
+    out["summary"]["unchanged"] = out.pop("unchanged")
+    out["differences"] = sum(out["summary"][k] for k in ("went_offline", "came_back", "changed", "added", "removed"))
+    return out
+
+
+def _when(iso: str | None) -> str:
+    if not iso:
+        return "time unknown"
+    try:
+        return datetime.fromisoformat(iso).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except ValueError:
+        return iso
+
+
+def _controls_note(run: dict) -> str:
+    c = run["controls"]
+    if not c:
+        return "no controls file"
+    return f"controls {c['online']}/{c['total']}" + ("" if c["online"] == c["total"] else " — SUSPECT")
+
+
+def _q(v: object) -> str:
+    return json.dumps(v, ensure_ascii=False) if isinstance(v, str) else str(v)
+
+
+def _n(count: int, noun: str) -> str:
+    return f"{count} {noun}" + ("" if count == 1 else "s")
+
+
+def render_diff(d: dict) -> str:
+    """The diff as text, for a terminal or a mail. Verdicts first, then the
+    list of what moved, then what did not."""
+    s = d["summary"]
+    lines = [f"Diff: {Path(d['old']['file']).name} -> {Path(d['new']['file']).name}",
+             f"  old: {_when(d['old']['checked_at'])}, {_n(d['old']['targets'], 'target')}, {_controls_note(d['old'])}",
+             f"  new: {_when(d['new']['checked_at'])}, {_n(d['new']['targets'], 'target')}, {_controls_note(d['new'])}"]
+    if d["new_suspect"]:
+        lines.append("  WARNING: the new run's controls failed — its OFFLINE verdicts are suspect; "
+                     "\"went OFFLINE\" below may be the circuit, not the targets.")
+    if d["old_suspect"]:
+        lines.append("  WARNING: the old run's controls failed — \"came back\" below may be the "
+                     "old circuit, not the targets.")
+    if d["differences"] == 0:
+        lines.append(f"No differences: {_n(s['unchanged'], 'target')}, same status, same title.")
+        return "\n".join(lines)
+    lines.append(f"Went OFFLINE ({s['went_offline']})")
+    for r in d["went_offline"]:
+        lines.append(f"  {r['name']}  {r['uri']}  — was {r['old_detail']}, now {r['new_error_class']}")
+    lines.append(f"Came back ({s['came_back']})")
+    for r in d["came_back"]:
+        lines.append(f"  {r['name']}  {r['uri']}  — was {r['old_error_class']}, now {r['new_detail']}")
+    lines.append(f"Changed ({s['changed']})")
+    for r in d["changed"]:
+        what = "; ".join(f"{c['field']}: {_q(c['old'])} -> {_q(c['new'])}"
+                         + (f" ({', '.join(c['listed_in'])})" if c.get("listed_in") else "")
+                         for c in r["changes"])
+        lines.append(f"  {r['name']}  {r['uri']}  — {what}")
+    lines.append(f"Added ({s['added']})")
+    for r in d["added"]:
+        lines.append(f"  {r['name']}  {r['uri']}  — {r.get('status_detail') or r['status']}"
+                     + (f" ({r['error_class']})" if r.get("error_class") else ""))
+    lines.append(f"Removed ({s['removed']})")
+    for r in d["removed"]:
+        lines.append(f"  {r['name']}  {r['uri']}  — was {r.get('status_detail') or r['status']}"
+                     + (f" ({r['error_class']})" if r.get("error_class") else ""))
+    lines.append(f"Unchanged: {s['unchanged']}")
+    return "\n".join(lines)
+
+
+def previous_run(out_dir: Path, stem: str, exclude: Path | None = None) -> Path | None:
+    """The most recent measurement file of the same list in out_dir, by the
+    stamp in its name — not the controls, diff or --indices-only files, and
+    not the file just written."""
+    found = []
+    for f in out_dir.glob("*.json"):  # no stem in the pattern: a stem may contain glob characters
+        if exclude is not None and f.resolve() == exclude.resolve():
+            continue
+        m = RESULT_FILE_RE.match(f.name)
+        if m and m.group("stem") == stem:
+            found.append((m.group("stamp"), int(m.group("n") or 1), f))
+    return max(found)[2] if found else None
+
+
+def diff_exit_code(d: dict) -> int:
+    """0 identical, 1 differences, 3 differences but one of the runs cannot
+    be trusted — the same 3 as a run whose controls failed."""
+    if d["differences"] == 0:
+        return 0
+    return 3 if (d["new_suspect"] or d["old_suspect"]) else 1
+
+
+def diff_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(
+        prog=f"{Path(sys.argv[0]).name} diff",
+        description="What changed between two runs of the same list: went offline, came back, "
+                    "changed title or detail, added, removed. Both runs' circuit controls are "
+                    "read from the -controls.json next to each file, and a failed control marks "
+                    "that side's negatives as suspect.")
+    p.add_argument("old", type=Path, help="earlier results file (<list>-<stamp>.json)")
+    p.add_argument("new", type=Path, help="later results file")
+    p.add_argument("--json", type=Path, metavar="PATH", help="also write the diff as JSON (never overwrites)")
+    args = p.parse_args(argv)
+    for f in (args.old, args.new):
+        if not f.is_file():
+            print(f"file not found: {f}", file=sys.stderr)
+            return 2
+    if args.json is not None and args.json.exists():
+        print(f"refusing to overwrite: {args.json}", file=sys.stderr)
+        return 2
+    try:
+        d = diff_runs(load_run(args.old), load_run(args.new))
+    except (ValueError, json.JSONDecodeError) as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    print(render_diff(d))
+    if args.json is not None:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"JSON: {args.json}", file=sys.stderr)
+    return diff_exit_code(d)
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 
@@ -797,7 +1029,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     "cross-check against any index sources you name. Details: README.md",
         epilog='targets file: one per line, "Name | URL" or just "URL". '
                'sources file (--indices): one per line, "Name | URL-or-path". '
-               'Lines starting with # are ignored.',
+               'Lines starting with # are ignored. '
+               'Compare two runs: %(prog)s diff OLD.json NEW.json',
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("targets", type=Path,
@@ -819,6 +1052,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="add a local file or directory tree as an index source (shortcut for a path line in --indices)")
     p.add_argument("--indices-only", action="store_true",
                    help="cross-check only; measure no target (remote indices are still fetched once)")
+    p.add_argument("--diff-previous", action="store_true",
+                   help="after the run, compare it with the most recent earlier run of the same list "
+                        "in --out-dir and write <base>-diff.json")
     return p.parse_args(argv)
 
 
@@ -843,6 +1079,9 @@ def print_indices_summary(indices: "Indices", results: list[dict]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["diff"]:
+        return diff_main(argv[1:])
     args = parse_args(argv)
     cfg = Config(proxy=args.proxy, timeout=args.timeout, delay=tuple(args.delay))
 
@@ -947,6 +1186,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Controls: {controls_path}", file=sys.stderr)
     if not args.no_html:
         print(f"HTML: {html_path}", file=sys.stderr)
+
+    if args.diff_previous:
+        prev = previous_run(args.out_dir, args.targets.stem, exclude=json_path)
+        if prev is None:
+            print(f"Diff: no earlier run of {args.targets.stem} in {args.out_dir} to compare with.",
+                  file=sys.stderr)
+        else:
+            d = diff_runs(load_run(prev), load_run(json_path))
+            diff_path = args.out_dir / f"{base}-diff.json"
+            diff_path.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+            print()
+            print(render_diff(d), flush=True)  # before the stderr line, when both are piped
+            print(f"Diff: {diff_path}", file=sys.stderr)
     return exit_code
 
 
