@@ -7,6 +7,40 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-13
+
+### Added
+- **Batch options for long lists.** `--journal FILE` appends every record
+  the moment it is measured; a relaunch skips what the journal already
+  holds, and the JSON/HTML snapshot at the end is written from the journal
+  and the run together, in list order. A line cut short by a crash is
+  ignored. `--controls-every N` measures the controls at the start, after
+  every N targets and at the end; each control record carries `checkpoint`.
+  A failed checkpoint stops the run, discards the records measured since the
+  last good checkpoint (they went through a circuit that then proved broken)
+  and exits `3`; the journal records the failed checkpoint so a relaunch
+  redoes exactly that segment.
+- **Stop rule.** `--stop-terms FILE` (one case-insensitive regex per line —
+  yours; the tool ships none) and `--exclusions FILE` (a persisted
+  do-not-fetch list). A label that matches is never fetched; a title — or,
+  for a placeholder title, the `og:title`/`meta description` — that matches
+  makes the record `EXCLUDED` with `stop_term` and `stop_where` and nothing
+  else, no title, no hints. The address is appended to the exclusions file
+  and every later run that reads it skips the target without a request. The
+  file is plain text (`<host> <date> term:<term> where:<…>`); a Markdown
+  table with the host in the first cell is read too; `.onion` entries may
+  be a 16+ character prefix, clearnet entries must be the whole host.
+- Progress line every 25 targets (online / offline / excluded so far).
+- HTML report: an *Excluded by the stop rule* group; control lines show
+  their checkpoint. `diff`: a transition to or from `EXCLUDED` is a
+  `status` change, not "went OFFLINE" / "came back".
+- 12 offline tests for the batch options; 64 in all.
+
+### Changed
+- Control records carry `checkpoint` (`end` for a plain run).
+- The run summary counts excluded targets and, with a journal, says how
+  many records came from it.
+
 ## [0.3.0] — 2026-09-13
 
 ### Added
@@ -133,7 +167,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/onion-status-check/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/xbara0x/onion-status-check/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xbara0x/onion-status-check/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xbara0x/onion-status-check/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xbara0x/onion-status-check/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xbara0x/onion-status-check/releases/tag/v0.1.0

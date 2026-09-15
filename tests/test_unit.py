@@ -566,5 +566,193 @@ class DiffBetweenRuns(unittest.TestCase):
             osc.check_one = original
 
 
+class Batch(unittest.TestCase):
+    """Journal, checkpoints and the stop rule — offline, with check_one and
+    measure_controls replaced by scripted answers."""
+
+    ONION = "http://" + "a" * 56 + ".onion/"
+    ONION2 = "http://" + "b" * 56 + ".onion/"
+    ONION3 = "http://" + "c" * 56 + ".onion/"
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self._check_one, self._controls = osc.check_one, osc.measure_controls
+
+    def tearDown(self):
+        osc.check_one, osc.measure_controls = self._check_one, self._controls
+
+    @staticmethod
+    def online(name, uri, title="T", **kw):
+        r = {"name": name, "uri": uri, "checked_at": "2026-09-13T20:00:00+00:00", "status": "ONLINE",
+             "status_detail": "ONLINE", "http_code": 200, "title": title, "title_source": "html_title",
+             "needs_js_rendering": False, "content_type": "text/html"}
+        r.update(kw)
+        return r
+
+    def script(self, answers: dict, controls_ok: list[bool]):
+        """check_one answers by uri; measure_controls answers by call order."""
+        calls = []
+        def fake_check(name, uri, session, cfg):
+            calls.append(uri)
+            return dict(answers[uri])
+        it = iter(controls_ok)
+        def fake_controls(session, cfg, checkpoint):
+            ok = next(it)
+            return [{"name": "[control] x", "uri": "http://c.onion/", "status": "ONLINE" if ok else "OFFLINE",
+                     "status_detail": "ONLINE" if ok else "OFFLINE", "checkpoint": checkpoint}]
+        osc.check_one, osc.measure_controls = fake_check, fake_controls
+        return calls
+
+    def run_main(self, targets: str, *extra: str) -> int:
+        t = self.d / "list.txt"; t.write_text(targets)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return osc.main([str(t), "--out-dir", str(self.d / "out"), "--no-html", "--delay", "0", "0", *extra])
+
+    def snapshot(self) -> list[dict]:
+        latest = max(f for f in (self.d / "out").glob("list-*.json") if "-controls" not in f.name)
+        return json.loads(latest.read_text())
+
+    # --- Journal -----------------------------------------------------------
+    def test_journal_segments_and_failed_checkpoint(self):
+        j = osc.Journal(self.d / "j.jsonl")
+        j.append(self.online("A", self.ONION))
+        j.checkpoint("start", [{"status": "ONLINE"}])
+        j.append(self.online("B", self.ONION2))
+        j.checkpoint("after 1", [{"status": "OFFLINE"}])       # B measured through a circuit that then failed
+        j.append(self.online("C", self.ONION3))                # trailing segment: the run died here
+        (self.d / "j.jsonl").open("a").write('{"name": "cut", "uri": "http://d.onion/", "sta')  # crash mid-line
+        done = j.load()
+        self.assertEqual(sorted(r["name"] for r in done.values()), ["A", "C"])
+        self.assertIn(osc.record_key(self.ONION), done)
+
+    def test_journal_resume_skips_measured_and_writes_snapshot_in_list_order(self):
+        j = self.d / "j.jsonl"
+        osc.Journal(j).append(self.online("B", self.ONION2, title="from journal"))
+        calls = self.script({self.ONION: self.online("A", self.ONION), self.ONION3: self.online("C", self.ONION3)}, [True])
+        rc = self.run_main(f"A | {self.ONION}\nB | {self.ONION2}\nC | {self.ONION3}\n", "--journal", str(j))
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [self.ONION, self.ONION3])                       # B skipped
+        self.assertEqual([r["name"] for r in self.snapshot()], ["A", "B", "C"])  # list order, journal merged
+        self.assertEqual(self.snapshot()[1]["title"], "from journal")
+        lines = [json.loads(l) for l in j.read_text().splitlines()]
+        self.assertEqual([l.get("checkpoint") for l in lines], [None, None, None, "end"])
+        # relaunch: nothing to measure, snapshot still written from the journal
+        calls.clear()
+        self.assertEqual(self.run_main(f"A | {self.ONION}\nB | {self.ONION2}\nC | {self.ONION3}\n", "--journal", str(j)), 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.snapshot()), 3)
+
+    # --- checkpoints ---------------------------------------------------------
+    def test_controls_every_stops_on_a_failed_checkpoint_and_discards_the_segment(self):
+        answers = {self.ONION: self.online("A", self.ONION), self.ONION2: self.online("B", self.ONION2),
+                   self.ONION3: self.online("C", self.ONION3)}
+        calls = self.script(answers, [True, False])           # start ok, "after 2" fails
+        j = self.d / "j.jsonl"
+        rc = self.run_main(f"A | {self.ONION}\nB | {self.ONION2}\nC | {self.ONION3}\n",
+                           "--journal", str(j), "--controls-every", "2")
+        self.assertEqual(rc, 3)
+        self.assertEqual(calls, [self.ONION, self.ONION2])    # C never measured
+        self.assertEqual(self.snapshot(), [])                 # A and B discarded: measured before the failed checkpoint
+        self.assertEqual(osc.Journal(j).load(), {})           # and the journal agrees on relaunch
+        controls = json.loads(next((self.d / "out").glob("list-*-controls.json")).read_text())
+        self.assertEqual([c["checkpoint"] for c in controls], ["start", "after 2"])
+
+    def test_controls_every_failed_start_measures_nothing(self):
+        calls = self.script({self.ONION: self.online("A", self.ONION)}, [False])
+        self.assertEqual(self.run_main(f"A | {self.ONION}\n", "--controls-every", "5"), 3)
+        self.assertEqual(calls, [])
+
+    def test_controls_every_all_good(self):
+        answers = {u: self.online(n, u) for n, u in (("A", self.ONION), ("B", self.ONION2), ("C", self.ONION3))}
+        self.script(answers, [True, True, True])              # start, after 2, end
+        self.assertEqual(self.run_main(f"A | {self.ONION}\nB | {self.ONION2}\nC | {self.ONION3}\n",
+                                       "--controls-every", "2"), 0)
+        self.assertEqual(len(self.snapshot()), 3)
+        controls = json.loads(next((self.d / "out").glob("list-*-controls.json")).read_text())
+        self.assertEqual([c["checkpoint"] for c in controls], ["start", "after 2", "end"])
+
+    # --- stop rule -----------------------------------------------------------
+    def test_stop_rule_reads_plain_lines_and_markdown_tables(self):
+        ex = self.d / "ex.txt"
+        ex.write_text("# comment\n"
+                      f"{'a' * 56}.onion\t2026-09-13\tterm:x\twhere:title\n"
+                      "| `bbbbbbbbbbbbbbbbbbbbbbbb` | 2026-09-13 | signal | where |\n"
+                      "|---|---|---|---|\n"
+                      "short\n"                      # too short for a prefix, no dot: ignored
+                      "www.example.org\n")
+        s = osc.StopRule(None, ex)
+        self.assertTrue(s.is_excluded(self.ONION))
+        self.assertTrue(s.is_excluded(self.ONION2))          # 24-char prefix from the table
+        self.assertFalse(s.is_excluded(self.ONION3))
+        self.assertTrue(s.is_excluded("https://example.org/x"))
+        self.assertFalse(s.is_excluded("https://notexample.org/"))
+        self.assertFalse(s.is_excluded("http://shortyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.onion/"))
+
+    def test_stop_rule_terms_match_and_exclude_writes_the_file(self):
+        terms = self.d / "terms.txt"; terms.write_text("# mine\n\\bforbidden\\b\nred\\s?room\n")
+        ex = self.d / "ex.txt"
+        s = osc.StopRule(terms, ex)
+        self.assertEqual(s.match("nothing here"), None)
+        self.assertEqual(s.match(None, "A Forbidden Thing"), "forbidden")
+        self.assertEqual(s.match("RedRoom live"), "redroom")
+        self.assertEqual(s.match("unforbidden"), None)       # whole word only, as the term says
+        s.exclude(self.ONION, "forbidden", "title")
+        line = ex.read_text().strip()
+        self.assertTrue(line.startswith("a" * 56 + ".onion\t"))
+        self.assertIn("\tterm:forbidden\twhere:title", line)
+        self.assertTrue(s.is_excluded(self.ONION))           # remembered in memory too
+
+    def test_apply_stop_rule_scrubs_the_record(self):
+        terms = self.d / "terms.txt"; terms.write_text("forbidden\n")
+        s = osc.StopRule(terms, None)
+        r = self.online("A", self.ONION, title="Loading...", static_hints={"meta_title": "", "meta_description": "forbidden stuff"})
+        out = osc.apply_stop_rule(s, "A", self.ONION, r)
+        self.assertEqual(out["status"], "EXCLUDED")
+        self.assertEqual(out["status_detail"], "EXCLUDED (stop term in meta)")
+        self.assertEqual((out["stop_term"], out["stop_where"]), ("forbidden", "meta"))
+        self.assertNotIn("static_hints", out); self.assertIsNone(out["title"]); self.assertNotIn("http_code_x", out)
+        self.assertEqual(set(out), {"name", "uri", "checked_at", "status", "status_detail", "http_code", "title",
+                                    "stop_term", "stop_where"})
+        clean = self.online("B", self.ONION2, title="Fine")
+        self.assertIs(osc.apply_stop_rule(s, "B", self.ONION2, clean), clean)
+
+    def test_stop_rule_in_a_run_label_title_and_exclusions_file(self):
+        terms = self.d / "terms.txt"; terms.write_text("forbidden\n")
+        ex = self.d / "ex.txt"; ex.write_text(f"{'c' * 56}.onion\t2026-09-01\tterm:old\twhere:title\n")
+        calls = self.script({self.ONION: self.online("A", self.ONION, title="a forbidden title"),
+                             self.ONION2: self.online("B", self.ONION2)}, [True])
+        rc = self.run_main(f"A | {self.ONION}\nB forbidden label | {self.ONION2}\nC | {self.ONION3}\n",
+                           "--stop-terms", str(terms), "--exclusions", str(ex), "--catalog", str(self.d))
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [self.ONION])                 # B: label matched, not fetched; C: on file, not fetched
+        snap = {r["name"]: r for r in self.snapshot()}
+        self.assertEqual(snap["A"]["status_detail"], "EXCLUDED (stop term in title)")
+        self.assertEqual(snap["B forbidden label"]["status_detail"], "EXCLUDED (stop term in label, not fetched)")
+        self.assertEqual(snap["C"]["status_detail"], "EXCLUDED (on the exclusions file, not fetched)")
+        self.assertTrue(all("indices" not in r for r in snap.values()))   # nothing looked up for excluded targets
+        hosts = [l.split("\t")[0] for l in ex.read_text().splitlines()]
+        self.assertEqual(hosts, ["c" * 56 + ".onion", "a" * 56 + ".onion", "b" * 56 + ".onion"])
+
+    def test_diff_treats_excluded_as_a_status_change_not_offline(self):
+        old = {"file": "o", "targets": 1, "checked_at": None, "controls": None, "records": [self.online("A", self.ONION)]}
+        new = dict(old, records=[osc.excluded_record("A", self.ONION, "EXCLUDED (stop term in title)", "x", "title")])
+        d = osc.diff_runs(old, new)
+        self.assertEqual(d["summary"]["went_offline"], 0)
+        self.assertEqual(d["changed"][0]["changes"], [{"field": "status", "old": "ONLINE", "new": "EXCLUDED"}])
+
+    def test_report_lists_excluded_and_checkpoints(self):
+        out = self.d / "r.html"
+        osc.write_html_report([osc.excluded_record("A", self.ONION, "EXCLUDED (stop term in title)", "x", "title")], out,
+                              [{"name": "[control] x", "status": "ONLINE", "status_detail": "ONLINE", "checkpoint": "after 250"}])
+        html = out.read_text()
+        self.assertIn("Excluded by the stop rule (1)", html)
+        self.assertIn("Offline (0)", html)
+        self.assertIn("[after 250]", html)
+
+    def test_batch_usage_errors(self):
+        self.assertEqual(self.run_main(f"A | {self.ONION}\n", "--stop-terms", str(self.d / "nope.txt")), 2)
+        self.assertEqual(self.run_main(f"A | {self.ONION}\n", "--controls-every", "-1"), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

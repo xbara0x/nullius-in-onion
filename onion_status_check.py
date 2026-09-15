@@ -31,7 +31,16 @@ Three false-OFFLINE traps this file exists to avoid
 Circuit controls
     Every run ends by measuring known-good targets. If they fail, nothing from
     the run may be recorded as dead (exit 3). Index sources that fail to load
-    have the same effect on "unlisted".
+    have the same effect on "unlisted". With --controls-every N the controls
+    also run at the start and after every N targets, and a failed checkpoint
+    stops the run and discards the segment since the last good one.
+
+Batch
+    --journal FILE appends every record as it is measured; a relaunch skips
+    what is already there. --stop-terms FILE / --exclusions FILE: a label,
+    title or meta text matching one of your terms makes the target EXCLUDED
+    — nothing about the page is kept, and the address goes to the exclusions
+    file so no later run fetches it again.
 
 Usage
     python3 onion_status_check.py targets.txt [--indices sources.txt] [--catalog PATH]
@@ -68,7 +77,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.3.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.4.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -697,7 +706,8 @@ def _esc(s: str) -> str:
 def write_html_report(results: list[dict], out_path: Path,
                       controls: list[dict] | None = None) -> None:
     online = [r for r in results if r["status"] == "ONLINE"]
-    offline = [r for r in results if r["status"] != "ONLINE"]
+    offline = [r for r in results if r["status"] == "OFFLINE"]
+    excluded = [r for r in results if r["status"] == "EXCLUDED"]
     needs_js = [r for r in online if r.get("needs_js_rendering")]
     # "With caveat": responded, but not a clean 2xx with a valid chain. The naive
     # version of this tool reported this whole group as OFFLINE.
@@ -766,13 +776,22 @@ def write_html_report(results: list[dict], out_path: Path,
         lines.append(f"<li><span class='lbl bad'>{_esc(detail)}</span> {_esc(r['name'])} — {_esc(r['uri'])}</li>")
     lines.append("</ol>")
 
+    if excluded:
+        lines.append(f"<h1>Excluded by the stop rule ({len(excluded)})</h1>"
+                     "<p>Nothing about these pages is kept: the address, when, and which term.</p><ol>")
+        for r in excluded:
+            lines.append(f"<li><span class='lbl dim'>{_esc(r.get('status_detail', 'EXCLUDED'))}</span> "
+                         f"{_esc(r['name'])} — {_esc(r['uri'])}</li>")
+        lines.append("</ol>")
+
     if controls:
         ok = sum(1 for c in controls if c["status"] == "ONLINE")
         verdict = ("<span class='ok'>Tor circuit validated</span>" if ok == len(controls)
                    else "<b class='bad'>CIRCUIT SUSPECT — do not record anything as dead from this run</b>")
         lines.append(f"<h1>Circuit controls ({ok}/{len(controls)}) — {verdict}</h1><ul>")
         for c in controls:
-            lines.append(f"<li>{_esc(c['name'])} — {_esc(c.get('status_detail', c['status']))}</li>")
+            at = f"<span class='dim'>[{_esc(c['checkpoint'])}]</span> " if c.get("checkpoint") else ""
+            lines.append(f"<li>{at}{_esc(c['name'])} — {_esc(c.get('status_detail', c['status']))}</li>")
         lines.append("</ul>")
 
     lines.append("</body></html>")
@@ -853,6 +872,10 @@ def diff_runs(old: dict, new: dict) -> dict:
         if o is None:
             out["added"].append({"name": n["name"], "uri": n["uri"], "status": n["status"],
                                  "status_detail": n.get("status_detail"), "error_class": n.get("error_class")})
+            continue
+        if o["status"] != n["status"] and "EXCLUDED" in (o["status"], n["status"]):
+            out["changed"].append({"name": n["name"], "uri": n["uri"], "status": n["status"],
+                                   "changes": [{"field": "status", "old": o["status"], "new": n["status"]}]})
             continue
         if o["status"] != n["status"]:
             if n["status"] == "OFFLINE":
@@ -1008,6 +1031,174 @@ def diff_main(argv: list[str]) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# Batch: journal, checkpoints, stop rule
+# --------------------------------------------------------------------------- #
+
+def measure_controls(session: requests.Session, cfg: Config, checkpoint: str) -> list[dict]:
+    """The control targets, once. `checkpoint` names the moment ("start",
+    "after 250", "end") so a long run's controls can be read in order."""
+    out = []
+    for name, uri in CONTROL_TARGETS:
+        r = check_one(name, uri, session, cfg)
+        r["checkpoint"] = checkpoint
+        out.append(r)
+        time.sleep(random.uniform(*cfg.delay))
+    return out
+
+
+class Journal:
+    """Append-only record of a run, one JSON object per line, so a run that
+    dies keeps what it measured and a relaunch skips it.
+
+    Two kinds of line: a target record (has "uri") and a checkpoint (has
+    "checkpoint": the controls' verdict at that moment). On load, records
+    are grouped into the segment that ends at the next checkpoint: a segment
+    closed by a failed checkpoint is discarded — those targets were measured
+    through a circuit that then proved broken, so they are measured again.
+    A trailing segment with no checkpoint after it (the run died) is kept.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def load(self) -> dict[str, dict]:
+        done: dict[str, dict] = {}
+        if not self.path.is_file():
+            return done
+        segment: dict[str, dict] = {}
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a line cut short by the crash that this journal exists for
+            if "checkpoint" in obj:
+                if obj.get("online", 0) == obj.get("total", 0):
+                    done.update(segment)
+                segment = {}
+            elif "uri" in obj:
+                segment[record_key(obj["uri"])] = obj
+        done.update(segment)
+        return done
+
+    def append(self, obj: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+    def checkpoint(self, label: str, controls: list[dict]) -> None:
+        self.append({"checkpoint": label, "online": sum(1 for c in controls if c["status"] == "ONLINE"),
+                     "total": len(controls), "at": datetime.now(timezone.utc).isoformat()})
+
+
+class StopRule:
+    """Stop on a target whose label, title or meta text matches one of your
+    terms — and keep nothing about it but the address, the date and the term.
+
+    The terms are yours (one regular expression per line, case-insensitive;
+    the tool ships none). The exclusions file is the memory: an address that
+    goes there is never fetched again by any later run that reads the file,
+    which is the point — the rule exists so that a page is read once, not
+    twice. Lines are "<host> <date> term:<term> where:<label|title|meta>";
+    "#" comments and a Markdown table with the host in the first cell are
+    read too. An .onion entry may be a prefix of the host (16+ characters);
+    a clearnet entry must match the whole host.
+    """
+
+    MIN_PREFIX = 16
+
+    def __init__(self, terms_path: Path | None = None, exclusions_path: Path | None = None):
+        self.terms: list[re.Pattern] = []
+        self.exclusions_path = exclusions_path
+        self.onion_prefixes: list[str] = []
+        self.hosts: set[str] = set()
+        if terms_path is not None:
+            for line in terms_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    self.terms.append(re.compile(line, re.IGNORECASE))
+        if exclusions_path is not None and exclusions_path.is_file():
+            for line in exclusions_path.read_text(encoding="utf-8").splitlines():
+                self._remember(self._first_cell(line))
+
+    @staticmethod
+    def _first_cell(line: str) -> str:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            return ""
+        if line.startswith("|"):
+            line = line[1:].split("|", 1)[0]
+        cell = line.split()[0] if line.split() else ""
+        return cell.strip("`").lower()
+
+    def _remember(self, entry: str) -> None:
+        if not entry or entry.startswith("-"):
+            return
+        entry = entry[4:] if entry.startswith("www.") else entry
+        if entry.endswith(".onion"):
+            entry = entry[:-len(".onion")]
+        if "." in entry:
+            self.hosts.add(entry)
+        elif len(entry) >= self.MIN_PREFIX:
+            self.onion_prefixes.append(entry)
+
+    @property
+    def active(self) -> bool:
+        return bool(self.terms or self.hosts or self.onion_prefixes)
+
+    def is_excluded(self, uri: str) -> bool:
+        host = host_of(uri)
+        if host in self.hosts:
+            return True
+        label = host[:-len(".onion")] if host.endswith(".onion") else host
+        return any(label.startswith(pfx) for pfx in self.onion_prefixes)
+
+    def match(self, *texts: str | None) -> str | None:
+        for text in texts:
+            if not text:
+                continue
+            for pat in self.terms:
+                m = pat.search(text)
+                if m:
+                    return m.group(0).lower()
+        return None
+
+    def exclude(self, uri: str, term: str, where: str) -> None:
+        host = host_of(uri)
+        self._remember(host)
+        if self.exclusions_path is not None:
+            self.exclusions_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.exclusions_path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{host}\t{datetime.now():%Y-%m-%d}\tterm:{term}\twhere:{where}\n")
+
+
+def excluded_record(name: str, uri: str, detail: str, term: str | None = None, where: str | None = None) -> dict:
+    """What is kept about an excluded target: the address, when, why. No
+    title, no hints, no body — nothing that describes the page."""
+    r = {"name": name, "uri": uri, "checked_at": datetime.now(timezone.utc).isoformat(),
+         "status": "EXCLUDED", "status_detail": detail, "http_code": None, "title": None}
+    if term:
+        r["stop_term"] = term
+        r["stop_where"] = where
+    return r
+
+
+def apply_stop_rule(stop: StopRule, name: str, uri: str, r: dict) -> dict:
+    """The rule after a fetch: title first, then the meta text the placeholder
+    branch may have collected. A match replaces the whole record."""
+    hints = r.get("static_hints") or {}
+    for where, text in (("title", r.get("title")),
+                        ("meta", " ".join(filter(None, (hints.get("meta_title"), hints.get("meta_description")))))):
+        term = stop.match(text)
+        if term:
+            stop.exclude(uri, term, where)
+            return excluded_record(name, uri, f"EXCLUDED (stop term in {where})", term, where)
+    return r
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 
@@ -1055,6 +1246,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--diff-previous", action="store_true",
                    help="after the run, compare it with the most recent earlier run of the same list "
                         "in --out-dir and write <base>-diff.json")
+    b = p.add_argument_group("batch", "long lists: keep what a dying run measured, validate the circuit "
+                                      "along the way, stop on what you do not want to read")
+    b.add_argument("--journal", type=Path, metavar="FILE",
+                   help="append every record to FILE as it is measured; on relaunch, targets already "
+                        "there are skipped (a segment closed by a failed checkpoint is redone)")
+    b.add_argument("--controls-every", type=int, default=0, metavar="N",
+                   help="measure the control targets at the start, after every N targets and at the end; "
+                        "a failed checkpoint stops the run and discards the segment since the last good one "
+                        "(default: controls at the end only)")
+    b.add_argument("--stop-terms", type=Path, metavar="FILE",
+                   help="one regular expression per line, case-insensitive; a label, title or meta text "
+                        "that matches makes the target EXCLUDED — nothing about the page is kept")
+    b.add_argument("--exclusions", type=Path, metavar="FILE",
+                   help="persisted do-not-fetch list: read before the run, appended on every exclusion "
+                        "(<host> <date> term:<term> where:<label|title|meta>)")
     return p.parse_args(argv)
 
 
@@ -1104,6 +1310,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.indices_only and not sources:
         print("--indices-only needs --indices and/or --catalog", file=sys.stderr)
         return 2
+    if args.stop_terms is not None and not args.stop_terms.is_file():
+        print(f"stop-terms file not found: {args.stop_terms}", file=sys.stderr)
+        return 2
+    if args.controls_every < 0:
+        print("--controls-every must be 0 or a positive number", file=sys.stderr)
+        return 2
     indices: Indices | None = Indices(sources) if sources else None
 
     session = requests.Session()
@@ -1130,24 +1342,87 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSON: {json_path}", file=sys.stderr)
         return 3 if any(s.error for s in sources) else 0
 
-    print(f"Checking {len(targets)} URLs via {cfg.proxy} (timeout {cfg.timeout}s)...", file=sys.stderr)
-
-    results = []
-    for i, (name, uri) in enumerate(targets, 1):
-        print(f"[{i}/{len(targets)}] {name} ({uri})", file=sys.stderr)
-        r = check_one(name, uri, session, cfg)
-        if indices is not None:
-            r["indices"] = indices.lookup(uri, label=name, title=r.get("title") or "")
-        results.append(r)
-        if i < len(targets):
-            time.sleep(random.uniform(*cfg.delay))
+    stop = StopRule(args.stop_terms, args.exclusions)
+    journal = Journal(args.journal) if args.journal else None
+    done: dict[str, dict] = journal.load() if journal else {}
+    pending = [(name, uri) for name, uri in targets if record_key(uri) not in done]
+    if journal:
+        print(f"Journal {journal.path}: {len(done)} already measured, {len(pending)} to go.", file=sys.stderr)
+    if stop.active:
+        print(f"Stop rule: {len(stop.terms)} term(s), {len(stop.hosts) + len(stop.onion_prefixes)} "
+              f"excluded address(es) on file.", file=sys.stderr)
 
     controls: list[dict] = []
-    if not args.no_controls:
-        print("\nMeasuring control targets (circuit validation)...", file=sys.stderr)
-        for name, uri in CONTROL_TARGETS:
-            controls.append(check_one(name, uri, session, cfg))
+    circuit_ok = True
+
+    def checkpoint(label: str) -> bool:
+        cs = measure_controls(session, cfg, label)
+        controls.extend(cs)
+        if journal:
+            journal.checkpoint(label, cs)
+        ok = sum(1 for c in cs if c["status"] == "ONLINE")
+        print(f"Controls ({label}): {ok}/{len(cs)} online."
+              + ("" if ok == len(cs) else "  <<< CIRCUIT SUSPECT"), file=sys.stderr)
+        return ok == len(cs)
+
+    every = args.controls_every if not args.no_controls else 0
+    measured: list[dict] = []
+    stopped_at: int | None = None  # index into `measured` where the discarded segment starts
+    if pending:
+        print(f"Checking {len(pending)} URLs via {cfg.proxy} (timeout {cfg.timeout}s)...", file=sys.stderr)
+        if every and not checkpoint("start"):
+            circuit_ok = False
+            stopped_at = 0
+            pending = []
+    counts = {"ONLINE": 0, "OFFLINE": 0, "EXCLUDED": 0}
+    segment_start = 0
+    for i, (name, uri) in enumerate(pending, 1):
+        print(f"[{i}/{len(pending)}] {name} ({uri})", file=sys.stderr)
+        if stop.is_excluded(uri):
+            r = excluded_record(name, uri, "EXCLUDED (on the exclusions file, not fetched)")
+        elif (term := stop.match(name)):
+            stop.exclude(uri, term, "label")
+            r = excluded_record(name, uri, "EXCLUDED (stop term in label, not fetched)", term, "label")
+        else:
+            r = apply_stop_rule(stop, name, uri, check_one(name, uri, session, cfg))
+            if indices is not None and r["status"] != "EXCLUDED":
+                r["indices"] = indices.lookup(uri, label=name, title=r.get("title") or "")
+        measured.append(r)
+        if journal:
+            journal.append(r)
+        counts[r["status"]] += 1
+        if i % 25 == 0 or i == len(pending):
+            print(f"  so far: {counts['ONLINE']} online, {counts['OFFLINE']} offline, "
+                  f"{counts['EXCLUDED']} excluded", file=sys.stderr)
+        if every and i % every == 0 and i < len(pending):
+            if not checkpoint(f"after {i}"):
+                circuit_ok = False
+                stopped_at = segment_start
+                break
+            segment_start = len(measured)
+        if i < len(pending):
             time.sleep(random.uniform(*cfg.delay))
+
+    if stopped_at is not None:
+        dropped = measured[stopped_at:]
+        measured = measured[:stopped_at]
+        if not measured and not dropped:
+            print("\nSTOPPED at the start checkpoint: circuit suspect, nothing measured. "
+                  "Check the Tor daemon, then relaunch the same command.", file=sys.stderr)
+        else:
+            print(f"\nSTOPPED: circuit suspect. {len(dropped)} record(s) measured since the last good checkpoint "
+                  "are not written — they were measured through a circuit that then failed"
+                  + (" (the journal has the failed checkpoint; relaunch with the same --journal to redo them)."
+                     if journal else "."), file=sys.stderr)
+    elif pending and not args.no_controls:
+        print("\nMeasuring control targets (circuit validation)...", file=sys.stderr)
+        circuit_ok = checkpoint("end")
+
+    # The snapshot is the list as measured: the journal's records for targets
+    # still on the list, plus this run's, in list order.
+    by_key = dict(done)
+    by_key.update({record_key(r["uri"]): r for r in measured})
+    results = [by_key[record_key(uri)] for _, uri in targets if record_key(uri) in by_key]
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     base = unique_base(args.out_dir, args.targets.stem)
@@ -1163,21 +1438,24 @@ def main(argv: list[str] | None = None) -> int:
 
     online = [r for r in results if r["status"] == "ONLINE"]
     caveat = [r for r in online if r.get("status_detail", "ONLINE") != "ONLINE"]
-    offline = [r for r in results if r["status"] != "ONLINE"]
+    offline = [r for r in results if r["status"] == "OFFLINE"]
+    excluded = [r for r in results if r["status"] == "EXCLUDED"]
     exit_code = 0
 
-    print(f"\nDone: {len(online)} online ({len(caveat)} with caveat), {len(offline)} offline.",
+    print(f"\nDone: {len(online)} online ({len(caveat)} with caveat), {len(offline)} offline"
+          + (f", {len(excluded)} excluded" if excluded else "")
+          + (f" — {len(done)} from the journal, {len(measured)} measured now" if journal else "") + ".",
           file=sys.stderr)
     for r in caveat:
         print(f"  caveat: {r['name']} — {r.get('status_detail')}", file=sys.stderr)
     if indices is not None:
-        print_indices_summary(indices, results)
+        print_indices_summary(indices, [r for r in results if "indices" in r])
         if any(src.error for src in indices.sources):
             exit_code = 3
     if controls:
         ok = sum(1 for c in controls if c["status"] == "ONLINE")
         print(f"Controls: {ok}/{len(controls)} online.", file=sys.stderr)
-        if ok < len(controls):
+        if not circuit_ok:
             print("  WARNING: circuit suspect — do NOT record any target as dead "
                   "based on this run.", file=sys.stderr)
             exit_code = 3  # non-zero so cron/CI cannot record a dead batch by mistake
