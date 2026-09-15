@@ -45,6 +45,46 @@ verba*.
 - **Since:** 2026-09-15 · **Sources:** [tor.taxi](https://tor.taxi/),
   [factually.co on mirror verification](https://factually.co/fact-checks/technology/verify-mainstream-websites-onion-mirrors-reputable-sources-authentication-methods-7d5b1b)
 
+### Hidden Services Today
+- **URL:** https://hidden-services.today/links · **kind:** curated
+- **What:** a clearnet directory of onion services in ~25 categories
+  (catalogs, search engines, forums, mail, chat, news, hosting, data leaks,
+  ransomware tracking, marketplaces…), each entry with the full address in
+  the link, 24-hour uptime counters and an online/unstable/offline mark.
+  151 hosts on 2026-09-15; 101 of its 126 onions were already in the
+  registry — the overlap of a curated list with the other curated lists.
+- **Operator:** pseudonymous ("from Null Industries" in the footer), with a
+  site PGP key, a canary and a PGP-signed `/mirrors.txt` that follows the
+  Onion Mirror Guidelines; the site's own onion is announced there.
+- **How it decides:** stated policy — *"keep the directory clean, compact
+  and free from spam, scams, clones, CSAM or other abusive content"*;
+  community submissions are *"moderated before they become public"*;
+  market "promoted placement" is a separate, labelled display feature that,
+  the site says, never buys an editorial highlight. "Trust, but verify."
+- **"Listed by" means:** a moderated directory carries the address, with a
+  live uptime record. Not a PGP-verified identity claim per entry, unlike
+  dark.fail — the uptime, not the key, is the evidence.
+- **Since:** 2026-09-15 · **Sources:** [home](https://hidden-services.today/),
+  [links](https://hidden-services.today/links), [mirrors.txt](https://hidden-services.today/mirrors.txt),
+  [OMG guide](https://hidden-services.today/guides/onion-mirror-guidelines)
+
+### Privacy-Handbuch
+- **URL:** https://www.privacy-handbuch.de/handbuch_24f.htm · **kind:** curated
+- **What:** the "Tor Onion Services (Darknet)" chapter of the Privacy-Handbuch,
+  a long-running German privacy manual: the onion addresses of providers the
+  author recommends — search engines, sites (Tor Project, Debian, heise, CIA,
+  Reddit, Proton), mail and XMPP providers, OpenPGP keyservers, Debian
+  repositories. 66 hosts on 2026-09-15.
+- **Operator:** the handbook's author, reachable through its Impressum;
+  identity behind a pseudonym.
+- **How it decides:** recommendation, not enumeration — *"Ansonsten kenne ich
+  kaum etwas, dass ich weiterempfehlen möchte"* ("otherwise I hardly know
+  anything else I would recommend").
+- **"Listed by" means:** a privacy author vouches for the service and copied
+  its official address. Small, and that is the point.
+- **Since:** 2026-09-15 · **Sources:** [the chapter](https://www.privacy-handbuch.de/handbuch_24f.htm),
+  [Privacy-Handbuch](https://www.privacy-handbuch.de/)
+
 ## crawler
 
 ### Ahmia
@@ -94,6 +134,16 @@ verba*.
   [submission requirements](https://securedrop.org/directory/submit/),
   [docs: onion name](https://docs.securedrop.org/en/stable/admin/deployment/onion_name.html)
 
+### Debian onion services
+- **URL:** https://onion.debian.org/ · **kind:** institutional
+- **What:** *"a list of onion services run by the Debian project"* — package
+  repositories, security, conference archives, project sites — *"most of them
+  served from several backends using OnionBalance"*. 215 hosts on 2026-09-15.
+- **Operator:** Debian System Administrators (the page is signed by DSA).
+- **"Listed by" means:** the operator publishes its own address. Debian
+  services only — an address listed here is Debian's.
+- **Since:** 2026-09-15 · **Sources:** [onion.debian.org](https://onion.debian.org/)
+
 ## tracker
 
 ### OGransomwatch
@@ -111,6 +161,25 @@ verba*.
 - **Since:** 2026-09-15 · **Sources:** [OGransomwatch](https://github.com/GavinEke/OGransomwatch),
   [ransomwatch (archived)](https://github.com/joshhighet/ransomwatch),
   [ransomwatch/groups.json](https://github.com/joshhighet/ransomwatch/blob/main/groups.json)
+
+### ransomware.live
+- **URL:** https://data.ransomware.live/groups.json · **kind:** tracker
+- **What:** the groups file of ransomware.live — every tracked ransomware
+  group with the locations of its data-leak and negotiation sites, onion
+  and clearnet. 397 groups and 31,809 victims tracked as of September 2026;
+  777 hosts on 2026-09-15, 154 of them in no other registry source.
+- **Operator:** Julien Mousqueton (Field CISO EMEA at Cohesity, lecturer at
+  École 2600), *"a personal project built and maintained independently"*;
+  since 2022.
+- **How it collects:** *"passively monitors ransomware groups' Data Leak
+  Sites"*, aggregated with open-source research and press; no intrusion.
+  The JSON database at `data.ransomware.live` is updated continuously (the
+  site shows the last update time).
+- **"Listed by" means:** the address belongs to a tracked ransomware group's
+  infrastructure. The bare-address labels the loader shows for this source
+  are JSON fragments — the hosts are right, the names are not meaningful.
+- **Since:** 2026-09-15 · **Sources:** [about](https://www.ransomware.live/about),
+  [groups.json](https://data.ransomware.live/groups.json)
 
 ## community
 
@@ -139,6 +208,34 @@ verba*.
   an address for it. Slow to change, so a recent address may be missing.
 - **Since:** 2026-09-15 · **Sources:** [the list](https://en.wikipedia.org/wiki/List_of_Tor_onion_services)
 
+### Wikipedia: the Japanese, German and Hebrew lists
+- **URLs:** the counterparts of the English list — [ja](https://ja.wikipedia.org/wiki/Onion%E3%83%89%E3%83%A1%E3%82%A4%E3%83%B3%E3%81%AE%E4%B8%80%E8%A6%A7),
+  [de](https://de.wikipedia.org/wiki/Liste_von_bekannten_Onion_Services_im_Tor-Netzwerk),
+  [he](https://he.wikipedia.org/wiki/%D7%A9%D7%99%D7%A8%D7%95%D7%AA%D7%99%D7%9D_%D7%A0%D7%A1%D7%AA%D7%A8%D7%99%D7%9D_%D7%91%D7%A8%D7%A9%D7%AA_Tor) · **kind:** community
+- **What:** each language edition keeps its own list of notable onion
+  services, and they do not copy each other: 203, 148 and 83 hosts on
+  2026-09-15, with 51, 20 and 52 addresses respectively that no other
+  registry source had.
+- **Operator:** Wikipedia editors of each edition; sourcing and notability
+  rules apply, differently per language.
+- **"Listed by" means:** an editor considered the service notable and cited
+  an address for it.
+- **Since:** 2026-09-15
+
+### Am0rphous/Dark-Net-Collection
+- **URL:** https://raw.githubusercontent.com/Am0rphous/Dark-Net-Collection/main/README.md · **kind:** community
+- **What:** a README of onion addresses by category — communication, crypto
+  wallets, file sharing and e-books, news, security OSes, search engines and
+  archives. 70 hosts on 2026-09-15, 29 not in any other registry source.
+  *"All content published here is for educational purposes only."*
+- **Operator:** GitHub user Am0rphous (pseudonymous); 18 commits, 21 stars,
+  no license. The same list, entry for entry, is published as
+  `MTXPr0ject/Dark-Web-Links` (230 stars, 6 commits); which is the origin
+  could not be established, so the one with the commit history is here.
+- **"Listed by" means:** a maintained personal collection carries the
+  address. Community-grade; well-known services, no markets.
+- **Since:** 2026-09-15 · **Sources:** [repository](https://github.com/Am0rphous/Dark-Net-Collection)
+
 ### deepdarkCTI (forum · ransomware · markets · search engines · others)
 - **URLs:** the raw Markdown of `forum.md`, `ransomware_gang.md`,
   `markets.md`, `search_engines.md`, `others.md` at
@@ -154,6 +251,49 @@ verba*.
   it. The status column is a snapshot; this tool exists partly to keep it
   honest.
 - **Since:** 2026-09-15 · **Sources:** [deepdarkCTI](https://github.com/fastfire/deepdarkCTI)
+
+## research
+
+A published measurement dataset is a snapshot: what an entry proves is
+exactly what the study measured, on the date it measured it — the card says
+which. A `research` source is not robot-grade (it does not count towards
+`crawler_only`) and not an identity claim either; it is evidence with a
+method and a date attached.
+
+### KAU Onion-Location measurements
+- **URL:** https://dart.cse.kau.se/ol-measurements-and-fp/mirrored-onions-2023-10-31.txt · **kind:** research
+- **What:** the dataset of *Onion-Location Measurements and Fingerprinting*
+  (Paul Syverson, Rasmus Dahlberg, Tobias Pulls, Rob Jansen — PoPETs 2025,
+  issue 2, CC BY 4.0, artifact "Available, Functional, Reproduced"): the
+  onion addresses that clearnet websites advertised through the
+  `Onion-Location` header, one line per clearnet domain (or group of
+  domains) and its onion, measured on 2023-10-31. 1,505 hosts — 1,263 of
+  them in no other registry source; the labels are the clearnet domains.
+- **Operator:** the paper's authors; hosted by the DART lab at Karlstad
+  University. The web server refuses some fetchers (HTTP 403 to a generic
+  client); it answers a plain GET through Tor.
+- **"Listed by" means:** on 2023-10-31 the clearnet domain in the label
+  announced this onion as its own — the domain owner's claim, recorded by a
+  measurement. Strong on identity, dated on liveness: the service may have
+  moved since.
+- **Since:** 2026-09-15 · **Sources:** [PoPETs page](https://petsymposium.org/popets/2025/popets-2025-0074.php),
+  [paper (PDF)](https://petsymposium.org/popets/2025/popets-2025-0074.pdf),
+  [DiVA record](https://www.diva-portal.org/smash/record.jsf?pid=diva2:2043824),
+  [dataset directory](https://dart.cse.kau.se/ol-measurements-and-fp/)
+
+### onionsec.csv (Q Misell)
+- **URL:** https://gist.githubusercontent.com/TheEnbyperor/90ba14517a0a8d184f8744252c6a6e8e/raw/onionsec.csv · **kind:** research
+- **What:** *"Analysis of security on Tor Hidden Services"* — a CSV of ~500
+  onion services scanned in November 2023 (gist created 2023-11-25, one
+  revision): open ports, TLS versions, known TLS vulnerabilities, HTTP
+  security headers, certificate details, `Onion-Location`. 128 hosts on
+  2026-09-15, 81 not in any other registry source.
+- **Operator:** Q Misell (GitHub/GitLab `TheEnbyperor`; AS207960 / Glauca,
+  Aberdeen), who also contributes to Tor.
+- **"Listed by" means:** the service existed and answered a TLS/HTTP scan
+  in November 2023. A snapshot, not a directory.
+- **Since:** 2026-09-15 · **Sources:** [the gist](https://gist.github.com/TheEnbyperor/90ba14517a0a8d184f8744252c6a6e8e),
+  [TheEnbyperor on gitlab.torproject.org](https://gitlab.torproject.org/TheEnbyperor)
 
 ## search
 
@@ -178,7 +318,11 @@ the query path is part of what the probe verified.
   scheme. A query for an address it has not crawled returns "0 results".
 - **Probe, 2026-09-15:** DuckDuckGo's onion came back (4 results); Ahmia's
   onion returned 0 results — coverage, not a failure. `1/2 probes found`, no
-  probe failed.
+  probe failed. Later the same day the probe failed once — the engine
+  answered with sponsored blocks only and no organic result — and passed
+  again when repeated: expect intermittent answers; a query that comes back
+  that way is recorded as `unlisted` by this engine for that target, and
+  `crawler_only` never rests on it alone.
 - **"Listed by" means:** OnionLand's crawler reached the address. Nothing
   about identity.
 - **Since:** 2026-09-15 · **Sources:** [onionlandsearchengine.net](https://onionlandsearchengine.net/),
@@ -220,3 +364,45 @@ the query path is part of what the probe verified.
   enumerates every group's addresses in one request (`/api/groups` is names
   only; addresses are per group). Needs a per-item mechanism the tool does
   not have yet.
+
+From a systematic sweep on 2026-09-15 (109 candidate pages found on the
+surface web, 31 lists and 3 engines run through `nullius indices`, novelty
+measured against the registry):
+
+- **Tor66** (`tor66.org/search?q=`): the probe passed (1/2, no failure), but
+  the site names no operator, states no policy and offers no contact — the
+  bar asks for a nameable operator. Revisit with evidence.
+- **VormWeb** and **Onion Engine** (clearnet search fronts): the probe found
+  none of the control targets in their results — coverage or shape, not
+  established.
+- **Culte du Code** ("annuaire d'adresses .onion, édition 2026-2027"): 340
+  hosts, but the page carries **v2 addresses** (dead since 2021) next to v3
+  ones — an old list re-dated. Not a source.
+- **lalaio1/Onion-sites**: 305 hosts, 6 commits, bare URLs for labels, some
+  dead-hosting entries; quality not established. Revisit after measuring
+  its entries' liveness.
+- **MTXPr0ject/Dark-Web-Links**: identical to Am0rphous/Dark-Net-Collection
+  (69 of 69 hosts); one copy is enough.
+- **OnionTree** (`oniontree-org/oniontree`): one YAML per service, ~300
+  files, last commit 2021-01-12, v2 and v3 mixed — a clone would be the
+  only way to load it, and it is stale.
+- **adityaax/darkweb-directory**: 20 category files of 2–16 addresses each;
+  +6 new at best per file. Not worth a fetch per file; revisit as a clone.
+- **Riseup, Systemli, Disroot, onionmx `map.yml`**: institutional and
+  correct, but 7–16 hosts each, nearly all already in the registry through
+  real-world-onion-sites and tor.taxi. Add on demand.
+- **Threatwatch/ransomwatch**, **dls-monitor**, **marktsec**, **haxdoggy**,
+  **RansomwareMonitor**: ransomware trackers with 0–37 addresses that
+  OGransomwatch and ransomware.live do not already carry; forks or subsets.
+- **Node lists** (Bitcoin onion nodes ×2, monero.fail, Lightning, Electrum):
+  another class — nodes, not web services; 18,000+ addresses that would only
+  add noise to "who lists it". A `nodes` kind could exist one day.
+- **Dargle** (40,000 domains, paginated), **Hunchly Dark Web Archive**
+  (a tar.gz of captures), **KAU onion-grab zip**, **IEEE DataPort** (login):
+  not enumerable in one plain GET.
+- **dark.fail's `phishy-onions`**: a list of phishing clones. "Listed by it"
+  is a *warning*, and the vocabulary has no kind for that yet — a `warning`
+  kind is the right shape, later.
+- **darkfail.io** (a dark.fail lookalike), hidden-wiki clones, "best onion
+  sites" SEO pages and vendor blog lists: link dumps or subsets of what is
+  already here.

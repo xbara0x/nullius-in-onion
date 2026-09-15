@@ -22,7 +22,7 @@ It never runs JavaScript, never logs in, never crawls, and never decides for
 you: it reports, with the reasons, and tells you when its own measurement
 cannot be trusted.
 
-**Status:** v0.7.0 — working and tested; the JSON layout may still change,
+**Status:** v0.8.0 — working and tested; the JSON layout may still change,
 and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
 
 <p align="center">
@@ -169,7 +169,8 @@ the source is, who runs it, how it decides what to list, and therefore what
 | `institutional` | the operator itself publishes the address | Tor Project's own services, SecureDrop directory |
 | `tracker` | a thematic tracker maintains it | OGransomwatch (ransomware leak sites) |
 | `community` | curated by pull request, one maintainer reviewing | real-world-onion-sites, Wikipedia's list, deepdarkCTI |
-| `search` | a search engine **queried per target** with the address — crawler-grade evidence | OnionLand Search |
+| `search` | a search engine **queried per target** with the address — crawler-grade evidence | OnionLand Search, Tor66 |
+| `research` | a published measurement dataset; what an entry proves is what the study measured — the card says | KAU's Onion-Location measurements, onionsec.csv |
 | `self` | your own catalog or bookmarks | whatever you pass with `--catalog` |
 
 The registry is the part of this project that grows by contribution: one

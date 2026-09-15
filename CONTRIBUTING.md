@@ -33,7 +33,9 @@ few friends).
 **Pick the kind honestly.** `curated` means a person verified identity (PGP,
 ownership proof); `crawler` means a robot reached it; `institutional` means
 the operator publishes its own addresses; `tracker` means a thematic tracker
-maintains it; `community` means curated by pull request. When in doubt
+maintains it; `community` means curated by pull request; `research` means a
+published measurement dataset, and the card must say what was measured, how
+and when — that is what an entry proves. When in doubt
 between two, choose the weaker one — the kind is what tells a reader how
 much "listed by" is worth.
 

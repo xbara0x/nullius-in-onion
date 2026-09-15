@@ -2,10 +2,42 @@
   "Ahmia": {
     "checked": "2026-09-15",
     "files": 1,
-    "hosts": 9022,
+    "hosts": 9358,
     "kind": "crawler",
     "names": 0,
     "origin": "https://ahmia.fi/onions/"
+  },
+  "Am0rphous/Dark-Net-Collection": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 70,
+    "kind": "community",
+    "names": 65,
+    "origin": "https://raw.githubusercontent.com/Am0rphous/Dark-Net-Collection/main/README.md"
+  },
+  "Debian onion services": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 215,
+    "kind": "institutional",
+    "names": 220,
+    "origin": "https://onion.debian.org/"
+  },
+  "Hidden Services Today": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 151,
+    "kind": "curated",
+    "names": 153,
+    "origin": "https://hidden-services.today/links"
+  },
+  "KAU Onion-Location measurements": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 1505,
+    "kind": "research",
+    "names": 1505,
+    "origin": "https://dart.cse.kau.se/ol-measurements-and-fp/mirrored-onions-2023-10-31.txt"
   },
   "OGransomwatch": {
     "checked": "2026-09-15",
@@ -23,6 +55,14 @@
     "probes_total": 2,
     "results_hosts": 6
   },
+  "Privacy-Handbuch": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 66,
+    "kind": "curated",
+    "names": 98,
+    "origin": "https://www.privacy-handbuch.de/handbuch_24f.htm"
+  },
   "SecureDrop directory": {
     "checked": "2026-09-15",
     "files": 1,
@@ -38,6 +78,30 @@
     "kind": "institutional",
     "names": 195,
     "origin": "https://onion.torproject.org/"
+  },
+  "Wikipedia (de): Onion Services": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 148,
+    "kind": "community",
+    "names": 281,
+    "origin": "https://de.wikipedia.org/wiki/Liste_von_bekannten_Onion_Services_im_Tor-Netzwerk"
+  },
+  "Wikipedia (he): Tor hidden services": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 83,
+    "kind": "community",
+    "names": 102,
+    "origin": "https://he.wikipedia.org/wiki/%D7%A9%D7%99%D7%A8%D7%95%D7%AA%D7%99%D7%9D_%D7%A0%D7%A1%D7%AA%D7%A8%D7%99%D7%9D_%D7%91%D7%A8%D7%A9%D7%AA_Tor"
+  },
+  "Wikipedia (ja): Onion domains": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 203,
+    "kind": "community",
+    "names": 338,
+    "origin": "https://ja.wikipedia.org/wiki/Onion%E3%83%89%E3%83%A1%E3%82%A4%E3%83%B3%E3%81%AE%E4%B8%80%E8%A6%A7"
   },
   "Wikipedia: Tor onion services": {
     "checked": "2026-09-15",
@@ -94,6 +158,22 @@
     "kind": "community",
     "names": 62,
     "origin": "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/search_engines.md"
+  },
+  "onionsec.csv (Q Misell)": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 128,
+    "kind": "research",
+    "names": 148,
+    "origin": "https://gist.githubusercontent.com/TheEnbyperor/90ba14517a0a8d184f8744252c6a6e8e/raw/onionsec.csv"
+  },
+  "ransomware.live": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 778,
+    "kind": "tracker",
+    "names": 2678,
+    "origin": "https://data.ransomware.live/groups.json"
   },
   "real-world-onion-sites": {
     "checked": "2026-09-15",

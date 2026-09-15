@@ -9,12 +9,15 @@
 #   tracker        a thematic tracker maintains it
 #   community      a list curated by pull request
 #   search         a search engine queried per target ({query} in the URL)
+#   research       a published measurement dataset; the card says what an entry proves
 # Every source has a card in SOURCES.md; the bar for adding one is in
 # CONTRIBUTING.md. Check them all with:  nullius indices --registry
 
 # -- curated -----------------------------------------------------------------
 dark.fail                       | https://dark.fail/                                                                   | curated
 tor.taxi                        | https://tor.taxi/                                                                    | curated
+Hidden Services Today           | https://hidden-services.today/links                                                  | curated
+Privacy-Handbuch                | https://www.privacy-handbuch.de/handbuch_24f.htm                                     | curated
 
 # -- crawler -----------------------------------------------------------------
 Ahmia                           | https://ahmia.fi/onions/                                                             | crawler
@@ -22,9 +25,11 @@ Ahmia                           | https://ahmia.fi/onions/                      
 # -- institutional -----------------------------------------------------------
 Tor Project onion services      | https://onion.torproject.org/                                                        | institutional
 SecureDrop directory            | https://securedrop.org/api/v1/directory/                                             | institutional
+Debian onion services           | https://onion.debian.org/                                                            | institutional
 
 # -- tracker -----------------------------------------------------------------
 OGransomwatch                   | https://raw.githubusercontent.com/GavinEke/OGransomwatch/main/groups.json            | tracker
+ransomware.live                 | https://data.ransomware.live/groups.json                                             | tracker
 
 # -- community ---------------------------------------------------------------
 real-world-onion-sites          | https://raw.githubusercontent.com/alecmuffett/real-world-onion-sites/master/README.md | community
@@ -34,6 +39,14 @@ deepdarkCTI ransomware          | https://raw.githubusercontent.com/fastfire/dee
 deepdarkCTI markets             | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/markets.md               | community
 deepdarkCTI search engines      | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/search_engines.md        | community
 deepdarkCTI others              | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/others.md                | community
+Wikipedia (ja): Onion domains   | https://ja.wikipedia.org/wiki/Onion%E3%83%89%E3%83%A1%E3%82%A4%E3%83%B3%E3%81%AE%E4%B8%80%E8%A6%A7 | community
+Wikipedia (de): Onion Services  | https://de.wikipedia.org/wiki/Liste_von_bekannten_Onion_Services_im_Tor-Netzwerk    | community
+Wikipedia (he): Tor hidden services | https://he.wikipedia.org/wiki/%D7%A9%D7%99%D7%A8%D7%95%D7%AA%D7%99%D7%9D_%D7%A0%D7%A1%D7%AA%D7%A8%D7%99%D7%9D_%D7%91%D7%A8%D7%A9%D7%AA_Tor | community
+Am0rphous/Dark-Net-Collection   | https://raw.githubusercontent.com/Am0rphous/Dark-Net-Collection/main/README.md       | community
+
+# -- research (a published measurement dataset; the card says what an entry proves) --
+KAU Onion-Location measurements | https://dart.cse.kau.se/ol-measurements-and-fp/mirrored-onions-2023-10-31.txt        | research
+onionsec.csv (Q Misell)         | https://gist.githubusercontent.com/TheEnbyperor/90ba14517a0a8d184f8744252c6a6e8e/raw/onionsec.csv | research
 
 # -- search (queried per target; robot-grade evidence, one request per target) --
 OnionLand Search                | http://3bbad7fauom4d6sgppalyqddsqbf5u5p56b5k5uk2zxsy3d6ey2jobad.onion/search?q={query}   | search

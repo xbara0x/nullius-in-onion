@@ -7,6 +7,28 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-15
+
+### Added
+- **The registry grows from 14 to 24 sources**, from a systematic sweep of
+  the surface web (109 candidate pages, 31 lists and 3 engines run through
+  `indices`, novelty measured against the registry before choosing):
+  Hidden Services Today and Privacy-Handbuch (curated); Debian's own onion
+  services (institutional); ransomware.live (tracker); the Japanese, German
+  and Hebrew Wikipedia lists and Am0rphous/Dark-Net-Collection (community);
+  and two research datasets — the Onion-Location measurements of Syverson,
+  Dahlberg, Pulls and Jansen (PoPETs 2025; 1,505 onions announced by their
+  own clearnet domains on 2023-10-31) and Q Misell's onionsec.csv scan of
+  November 2023. Every card in `SOURCES.md` has its corroboration URLs;
+  the "considered, not included" section records 15 more with the reason
+  (a v2-laden list re-dated to 2026, identical copies, per-file
+  collections, node lists, datasets that are not one GET, a phishing-clone
+  list that needs a `warning` kind).
+- **`kind: research`** — a published measurement dataset; what an entry
+  proves is what the study measured, and the card says which. Not
+  robot-grade: it does not count towards `crawler_only`.
+- The OnionLand card records that the engine answers intermittently.
+
 ## [0.7.0] — 2026-09-15
 
 ### Added
@@ -311,7 +333,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.4.0...v0.5.0

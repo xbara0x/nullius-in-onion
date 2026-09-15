@@ -86,7 +86,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.7.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.8.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -285,6 +285,7 @@ SOURCE_KINDS = {
     "tracker": "a thematic tracker maintains it (ransomware leak sites)",
     "community": "a list curated by pull request (deepdarkCTI, real-world-onion-sites)",
     "search": "a search engine queried per target with the address — crawler-grade evidence, one request per target",
+    "research": "a published measurement dataset; what an entry proves is what the study measured — the card says",
     "self": "your own catalog or bookmarks (--catalog)",
 }
 UNSPECIFIED_KIND = "unspecified"
