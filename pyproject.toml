@@ -27,6 +27,10 @@ dependencies = [
   "beautifulsoup4>=4.12",
 ]
 
+[project.optional-dependencies]
+# --descriptor: ask the Tor control port whether an offline onion is still published
+descriptor = ["stem>=1.8"]
+
 [project.urls]
 Homepage = "https://github.com/xbara0x/nullius-in-onion"
 Changelog = "https://github.com/xbara0x/nullius-in-onion/blob/main/CHANGELOG.md"

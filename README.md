@@ -15,11 +15,14 @@ addresses. It answers three questions, honestly:
 3. **What changed since last time?** — a diff between two runs: went offline,
    came back, new title, new verdict — with each run's circuit controls in view.
 
+And one more, optional: **down, or gone?** — for an offline onion, whether its
+descriptor is still published on the Tor directories.
+
 It never runs JavaScript, never logs in, never crawls, and never decides for
 you: it reports, with the reasons, and tells you when its own measurement
 cannot be trusted.
 
-**Status:** v0.6.0 — working and tested; the JSON layout may still change,
+**Status:** v0.7.0 — working and tested; the JSON layout may still change,
 and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
 
 <p align="center">
@@ -367,7 +370,7 @@ What counts as a change, for a target present in both runs:
 | Bucket | Trigger |
 |---|---|
 | **Went OFFLINE** / **Came back** | `status` flipped |
-| **Changed** | both ONLINE and `status_detail`, `http_code`, `title` or `title_source` differ; both OFFLINE and `error_class` differs; or the `indices` verdict differs (when both runs had indices) |
+| **Changed** | both ONLINE and `status_detail`, `http_code`, `title` or `title_source` differ; both OFFLINE and `error_class` differs, or `descriptor` differs (when both runs had one); or the `indices` verdict differs (when both runs had indices) |
 | **Added** / **Removed** | present in one run only |
 
 Whitespace inside a title is not a change. A name edit is not a change either —
@@ -392,6 +395,61 @@ status stays the run's; the diff's verdict is in the file.
 ```bash
 python3 nullius.py my-list.txt --diff-previous
 ```
+
+---
+
+## Down, or gone? — the descriptor check
+
+`OFFLINE` says a service did not answer. It does not say whether anyone is
+still running it. At the Tor layer a live onion service **publishes a
+descriptor** to a handful of directory relays (the HSDirs) every few hours;
+a client fetches it before it can connect. So an OFFLINE onion is one of two
+things — a service that is still **published but not responding** (overloaded,
+application down, rendezvous failing), or one that is **not published** at
+all, which is what "gone" looks like from the network. A plain GET cannot
+tell them apart; the control port can.
+
+```bash
+pip install stem
+python3 nullius.py my-list.txt --descriptor --control-port 9151
+```
+
+With `--descriptor`, every OFFLINE `.onion` gets one more question: `HSFETCH`
+through the Tor control port, and the answer from the HSDirs — `RECEIVED`, or
+`FAILED` with a reason. The record gains `descriptor` (`published` /
+`not_published` / `unknown`) and `descriptor_detail`; the report labels the
+offline lines *published, not responding* or *not published*; the summary
+counts them; `diff` reports a change from one to the other.
+
+```
+Descriptors of the offline: 2 published (down, not gone), 5 not published (gone at the Tor layer), 0 unknown.
+```
+
+**What it needs.** The `stem` package (optional; `pip install stem`), and a
+Tor control port you can authenticate to. Tor Browser's own tor listens on
+`9151` with cookie authentication readable by your user — the easiest path.
+The system daemon needs `ControlPort 9051` and `CookieAuthentication 1` in
+`torrc`, and a user that can read the cookie file. When any of that is
+missing, every affected record says `unknown` with the reason, the terminal
+prints the reason once and then "same reason as above", and the run goes on:
+it never aborts anything. Records taken from a `--journal` keep whatever they
+had; only targets measured in this run are asked.
+
+**How it decides.** Tor asks several HSDirs one after another and emits one
+`REQUESTED` and one `FAILED` per directory it tried, with no aggregate event —
+so a single `NOT_FOUND` proves nothing. *Not published* is concluded only
+when there has been a `FAILED`, no request is still in flight, and a quiet
+period has passed with nothing new. `RECEIVED` from any directory, at any
+moment before the deadline, is *published*. Other reasons (`QUERY_REJECTED`,
+`BAD_DESC`, …) are `unknown`, named; so is a deadline reached with a lookup
+still in progress — the detail says how many `NOT_FOUND` had arrived. The
+first lookup of a run may take most of the timeout (default 60 s) while the
+control connection's tor builds its first HSDir circuit.
+
+**What it tells the network.** A descriptor fetch is what every Tor client does
+before connecting; the failed GET already did one. The HSDirs learn that
+someone asked for that (blinded) address — not who. Nothing is sent to the
+service itself.
 
 ---
 
@@ -465,6 +523,39 @@ clearnet entry must be the whole host.
 
 ---
 
+## What this is not
+
+**Not a monitoring system.** If you *operate* onion services, the Tor
+Project's [Onionprobe](https://onionservices.torproject.org/apps/web/onionprobe/)
+is the tool: it probes the endpoints you configure, continuously
+(`--loop`), with retries; checks HTTP status, TLS certificates, the
+descriptor and its latency; exports Prometheus metrics
+(`onion_service_reachable`, `onion_service_descriptor_reachable`,
+`onion_service_certificate_expiry_seconds`, …) with Grafana dashboards and
+Alertmanager rules; and can launch its own tor. Nullius does none of that on
+purpose — no loop, no metrics, no alerts, no retries — and where the two
+overlap (HTTP status, descriptor reachability) Onionprobe is the more
+thorough instrument for a service that is yours.
+
+Nullius is for the other situation: **a list of addresses that are not
+yours**, usually long, usually of unknown quality, measured once (or once a
+week) to decide what to believe about it. That is why its questions are
+different — *is it up* with the honesty rules that a naive checker gets
+wrong; *who already lists it*, against a registry of indices with a stated
+kind each; *what changed since last time*; and, for the offline, *down or
+gone*. And why its constraints are different: one plain GET, never
+JavaScript, never a login, never in parallel, a stop rule for what must not
+be read, and the refusal to record a negative when its own controls say the
+circuit was not trustworthy.
+
+**Not a crawler, not a search engine, not an index.** It follows no link,
+indexes nothing, and its registry lists indices, not services. **Not a
+verdict.** It reports what it measured and who said what; deciding whether a
+name-match is a mirror or a clone, or whether "listed by a crawler" means
+anything, is yours.
+
+---
+
 ## Reference
 
 ### Options
@@ -486,6 +577,10 @@ clearnet entry must be the whole host.
 | `--controls-every N` | 0 | controls at the start, after every N targets and at the end; a failed checkpoint stops the run |
 | `--stop-terms FILE` | — | one regex per line; a matching label, title or meta text makes the target `EXCLUDED` |
 | `--exclusions FILE` | — | do-not-fetch list, read before the run and appended on every exclusion |
+| `--descriptor` | off | for every OFFLINE `.onion`, ask the Tor control port whether its descriptor is published (needs `stem`) |
+| `--control-port PORT` | 9051 | Tor control port; Tor Browser's tor listens on 9151 |
+| `--control-socket PATH` | — | Tor control socket, instead of a port |
+| `--descriptor-timeout S` | 60 | per lookup; the first one of a run may need most of it |
 | `--version` | — | print the version and exit |
 
 `diff OLD.json NEW.json [--json PATH]` compares two result files — see
@@ -531,7 +626,9 @@ placeholder and `og:title`/`twitter:title` was used), `html_title_placeholder`
 `challenge_page`. The server's `Content-Type` decides what counts as HTML; the
 body is sniffed only when there is no header.
 
-OFFLINE records add `error_class` and a truncated `error` string.
+OFFLINE records add `error_class` and a truncated `error` string; with
+`--descriptor`, OFFLINE `.onion` records add `descriptor` (`published`,
+`not_published`, `unknown`) and `descriptor_detail`.
 
 EXCLUDED records (stop rule) carry only `name`, `uri`, `checked_at`,
 `status`, `status_detail`, `http_code: null`, `title: null` and — when a

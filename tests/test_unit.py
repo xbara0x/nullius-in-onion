@@ -1138,5 +1138,227 @@ class SearchSources(unittest.TestCase):
         self.assertTrue(all(r["indices"]["sources_failed"] == ["Engine"] for r in recs))
 
 
+class DescriptorCheck(unittest.TestCase):
+    """Down, or gone? — offline, with a fake `stem` in sys.modules that plays the
+    control port: HSFETCH replies and HS_DESC events on a schedule."""
+
+    ONION = "d" * 56 + ".onion"
+
+    class Event:
+        def __init__(self, action, address, reason=None):
+            self.action, self.address, self.reason = action, address, reason
+
+    def fake_stem(self, script, *, connect_error=None, auth_error=None, hsfetch_ok=True):
+        """script: list of (delay_seconds, Event) emitted after HSFETCH."""
+        import types
+        stem = types.ModuleType("stem"); connection = types.ModuleType("stem.connection"); control = types.ModuleType("stem.control")
+        class SocketError(Exception): pass
+        class AuthenticationFailure(Exception): pass
+        stem.SocketError = SocketError; connection.AuthenticationFailure = AuthenticationFailure
+        control.EventType = types.SimpleNamespace(HS_DESC="HS_DESC")
+        test = self
+        class Reply:
+            def __init__(self, ok): self.ok = ok
+            def is_ok(self): return self.ok
+            def __str__(self): return "250 OK" if self.ok else '552 Invalid argument "x"'
+        class Controller:
+            instances = []; connects = []; listener_error = None
+            def __init__(self): self.listener = None; self.closed = False; Controller.instances.append(self)
+            @classmethod
+            def from_port(cls, port=9051):
+                cls.connects.append(("port", port))
+                if connect_error: raise SocketError(connect_error)
+                return cls()
+            @classmethod
+            def from_socket_file(cls, path):
+                cls.connects.append(("socket", path))
+                if connect_error: raise SocketError(connect_error)
+                return cls()
+            def authenticate(self):
+                if auth_error: raise AuthenticationFailure(auth_error)
+            def add_event_listener(self, fn, kind):
+                if Controller.listener_error: raise Exception(Controller.listener_error)
+                self.listener = fn
+            def msg(self, cmd):
+                test.assertTrue(cmd.startswith("HSFETCH "))
+                if not hsfetch_ok: return Reply(False)
+                import threading
+                for delay, ev in script:
+                    threading.Timer(delay, self.listener, args=(ev,)).start()
+                return Reply(True)
+            def close(self): self.closed = True
+        control.Controller = Controller
+        stem.connection, stem.control = connection, control
+        sys.modules["stem"], sys.modules["stem.connection"], sys.modules["stem.control"] = stem, connection, control
+        return Controller
+
+    def setUp(self):
+        self._saved = {k: sys.modules.get(k) for k in ("stem", "stem.connection", "stem.control")}
+        self._quiet = osc.DESCRIPTOR_QUIET_SECONDS
+        osc.DESCRIPTOR_QUIET_SECONDS = 0.5   # timers below fire at <= 0.2 s: a wide margin, not a race
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None: sys.modules.pop(k, None)
+            else: sys.modules[k] = v
+        osc.DESCRIPTOR_QUIET_SECONDS = self._quiet
+
+    def test_published(self):
+        C = self.fake_stem([(0.05, self.Event("REQUESTED", self.ONION[:-6])), (0.1, self.Event("RECEIVED", self.ONION[:-6]))])
+        d = osc.DescriptorChecker(port=9151, timeout=5)
+        self.assertEqual(d.check(self.ONION)[0], "published")
+        self.assertEqual(d.check(self.ONION)[0], "published")       # second check reuses the connection
+        self.assertEqual(len(C.instances), 1)
+        d.close(); self.assertTrue(C.instances[0].closed)
+
+    def test_not_published_needs_a_failed_and_then_silence(self):
+        a = self.ONION[:-6]
+        self.fake_stem([(0.0, self.Event("REQUESTED", a)), (0.05, self.Event("FAILED", a, "NOT_FOUND")),
+                        (0.1, self.Event("REQUESTED", a)), (0.15, self.Event("FAILED", a, "NOT_FOUND"))])
+        d = osc.DescriptorChecker(timeout=5)
+        v, detail = d.check(self.ONION)
+        self.assertEqual((v, detail), ("not_published", "no descriptor on the HSDirs (2 × NOT_FOUND)"))
+        # a FAILED from one HSDir followed by RECEIVED from another is published
+        self.fake_stem([(0.05, self.Event("FAILED", a, "NOT_FOUND")), (0.15, self.Event("RECEIVED", a))])
+        self.assertEqual(osc.DescriptorChecker(timeout=5).check(self.ONION)[0], "published")
+        # events about another address are not ours
+        self.fake_stem([(0.05, self.Event("RECEIVED", "e" * 56))])
+        v, detail = osc.DescriptorChecker(timeout=0.8).check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("no answer from the HSDirs", detail)
+
+    def test_outstanding_request_blocks_the_quiet_period(self):
+        """FAILED from one HSDir, then REQUESTED to the next: the quiet clock
+        must not conclude 'gone' while that request is in flight."""
+        a = self.ONION[:-6]
+        # the late RECEIVED lands well after the quiet period would have elapsed
+        self.fake_stem([(0.0, self.Event("REQUESTED", a)), (0.05, self.Event("FAILED", a, "NOT_FOUND")),
+                        (0.1, self.Event("REQUESTED", a)), (1.2, self.Event("RECEIVED", a))])
+        self.assertEqual(osc.DescriptorChecker(timeout=5).check(self.ONION)[0], "published")
+        # …and if it never answers, the deadline says unknown — not not_published
+        self.fake_stem([(0.0, self.Event("REQUESTED", a)), (0.05, self.Event("FAILED", a, "NOT_FOUND")),
+                        (0.1, self.Event("REQUESTED", a))])
+        v, detail = osc.DescriptorChecker(timeout=1.0).check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("1 × NOT_FOUND, but a lookup was still in progress", detail)
+
+    def test_received_in_the_last_poll_before_the_deadline_counts(self):
+        a = self.ONION[:-6]
+        self.fake_stem([(0.0, self.Event("REQUESTED", a)), (0.05, self.Event("FAILED", a, "NOT_FOUND")),
+                        (0.1, self.Event("REQUESTED", a)), (0.9, self.Event("RECEIVED", a))])
+        self.assertEqual(osc.DescriptorChecker(timeout=1.0).check(self.ONION)[0], "published")
+
+    def test_subdomain_and_case_use_the_service_address(self):
+        a = self.ONION[:-6]
+        C = self.fake_stem([(0.05, self.Event("RECEIVED", a))])
+        sent = []
+        C.msg_orig = C.msg
+        def msg(self_, cmd): sent.append(cmd); return C.msg_orig(self_, cmd)
+        C.msg = msg
+        d = osc.DescriptorChecker(timeout=5)
+        self.assertEqual(d.check(f"forum.{self.ONION.upper()}")[0], "published")
+        self.assertEqual(sent, [f"HSFETCH {a}"])
+        self.assertEqual(osc.DescriptorChecker().check("short.onion"), ("unknown", "not a v3 onion address"))
+
+    def test_other_failure_reasons_are_unknown(self):
+        a = self.ONION[:-6]
+        self.fake_stem([(0.05, self.Event("FAILED", a, "QUERY_REJECTED"))])
+        v, detail = osc.DescriptorChecker(timeout=5).check(self.ONION)
+        self.assertEqual((v, detail), ("unknown", "HSDir lookup failed: QUERY_REJECTED"))
+
+    def test_connection_problems_are_reported_once_and_never_abort(self):
+        C = self.fake_stem([], connect_error="[Errno 111] Connection refused")
+        d = osc.DescriptorChecker(port=9051)
+        v, detail = d.check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("control port unreachable (9051)", detail)
+        self.assertEqual(d.check(self.ONION), (v, detail))           # remembered…
+        self.assertEqual(len(C.connects), 1)                          # …and not retried
+        C = self.fake_stem([], auth_error="cookie not readable")
+        v, detail = osc.DescriptorChecker().check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("authentication failed", detail)
+        self.assertTrue(C.instances[-1].closed)
+        C = self.fake_stem([(0.05, self.Event("RECEIVED", self.ONION[:-6]))])
+        C.listener_error = "SETEVENTS HS_DESC refused"
+        v, detail = osc.DescriptorChecker().check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("cannot deliver HS_DESC events", detail); self.assertTrue(C.instances[-1].closed)
+        self.fake_stem([], hsfetch_ok=False)
+        v, detail = osc.DescriptorChecker().check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("HSFETCH refused", detail)
+        self.assertEqual(osc.DescriptorChecker().check("example.org")[0], "unknown")
+
+    def test_control_socket_path(self):
+        C = self.fake_stem([(0.05, self.Event("RECEIVED", self.ONION[:-6]))])
+        d = osc.DescriptorChecker(port=9051, socket_path="/run/tor/control", timeout=5)
+        self.assertEqual(d.check(self.ONION)[0], "published")
+        self.assertEqual(C.connects, [("socket", "/run/tor/control")])
+
+    def test_without_stem_installed(self):
+        for k in ("stem", "stem.connection", "stem.control"):
+            sys.modules[k] = None                                    # makes `import stem` raise ImportError
+        v, detail = osc.DescriptorChecker().check(self.ONION)
+        self.assertEqual(v, "unknown"); self.assertIn("stem is not installed", detail)
+
+    def test_run_checks_only_offline_onions(self):
+        a = self.ONION[:-6]
+        C = self.fake_stem([(0.05, self.Event("FAILED", a, "NOT_FOUND"))])
+        d = Path(tempfile.mkdtemp())
+        t = d / "list.txt"; t.write_text(f"Up | http://{'a' * 56}.onion/\nDown | http://{self.ONION}/\nClear | https://example.org/\n")
+        answers = {f"http://{'a' * 56}.onion/": {"name": "Up", "uri": f"http://{'a' * 56}.onion/", "checked_at": "x", "status": "ONLINE",
+                                                  "status_detail": "ONLINE", "http_code": 200, "title": "T", "title_source": "html_title"},
+                   f"http://{self.ONION}/": {"name": "Down", "uri": f"http://{self.ONION}/", "checked_at": "x", "status": "OFFLINE",
+                                             "status_detail": "OFFLINE", "http_code": None, "title": None, "error_class": "timeout"},
+                   "https://example.org/": {"name": "Clear", "uri": "https://example.org/", "checked_at": "x", "status": "OFFLINE",
+                                            "status_detail": "OFFLINE", "http_code": None, "title": None, "error_class": "timeout"}}
+        original = osc.check_one
+        osc.check_one = lambda name, uri, session, cfg: dict(answers[uri])
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = osc.main([str(t), "--out-dir", str(d / "o"), "--no-controls", "--no-html", "--delay", "0", "0",
+                               "--descriptor", "--control-port", "9151", "--descriptor-timeout", "5"])
+        finally:
+            osc.check_one = original
+        self.assertEqual(rc, 0)
+        recs = {r["name"]: r for r in json.loads(next((d / "o").glob("list-*.json")).read_text())}
+        self.assertNotIn("descriptor", recs["Up"])                 # online: not asked
+        self.assertNotIn("descriptor", recs["Clear"])              # clearnet: not asked
+        self.assertEqual(recs["Down"]["descriptor"], "not_published")
+        self.assertIn("1 not published (gone at the Tor layer)", err.getvalue())
+        self.assertTrue(C.instances and C.instances[0].closed)     # connection closed at the end
+        # a bad timeout is a usage error
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main([str(t), "--descriptor", "--descriptor-timeout", "0", "--out-dir", str(d / "o2")]), 2)
+
+    def test_connection_error_is_printed_once_per_run(self):
+        self.fake_stem([], connect_error="[Errno 111] Connection refused")
+        d = Path(tempfile.mkdtemp())
+        t = d / "list.txt"; t.write_text(f"A | http://{'a' * 56}.onion/\nB | http://{self.ONION}/\n")
+        off = lambda name, uri: {"name": name, "uri": uri, "checked_at": "x", "status": "OFFLINE", "status_detail": "OFFLINE",
+                                 "http_code": None, "title": None, "error_class": "timeout"}
+        original = osc.check_one
+        osc.check_one = lambda name, uri, session, cfg: off(name, uri)
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                osc.main([str(t), "--out-dir", str(d / "o"), "--no-controls", "--no-html", "--delay", "0", "0", "--descriptor"])
+        finally:
+            osc.check_one = original
+        text = err.getvalue()
+        self.assertEqual(text.count("control port unreachable"), 2)  # the first target's line, and the summary — not every target
+        self.assertIn("descriptor: unknown (same reason as above)", text)
+        recs = json.loads(next((d / "o").glob("list-*.json")).read_text())
+        self.assertTrue(all("control port unreachable" in r["descriptor_detail"] for r in recs))  # every record keeps the reason
+
+    def test_diff_and_report_carry_the_descriptor(self):
+        off = {"name": "A", "uri": f"http://{self.ONION}/", "checked_at": "x", "status": "OFFLINE", "status_detail": "OFFLINE",
+               "http_code": None, "title": None, "error_class": "timeout", "descriptor": "published", "descriptor_detail": "d"}
+        gone = dict(off, descriptor="not_published")
+        mk = lambda recs: {"file": "f", "targets": len(recs), "checked_at": None, "controls": None, "records": recs}
+        d = osc.diff_runs(mk([off]), mk([gone]))
+        self.assertEqual(d["changed"][0]["changes"], [{"field": "descriptor", "old": "published", "new": "not_published"}])
+        out = Path(tempfile.mkdtemp()) / "r.html"
+        osc.write_html_report([off, dict(gone, uri="http://" + "e" * 56 + ".onion/")], out, None)
+        html = out.read_text()
+        self.assertIn("published, not responding", html); self.assertIn("not published", html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

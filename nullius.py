@@ -38,6 +38,11 @@ Circuit controls
     also run at the start and after every N targets, and a failed checkpoint
     stops the run and discards the segment since the last good one.
 
+Descriptor (optional, needs stem and a Tor control port)
+    --descriptor asks, for every OFFLINE .onion, whether its descriptor is
+    still published on the HSDirs (HSFETCH): "published" is down-not-gone,
+    "not_published" is gone at the Tor layer, "unknown" says why.
+
 Batch
     --journal FILE appends every record as it is measured; a relaunch skips
     what is already there. --stop-terms FILE / --exclusions FILE: a label,
@@ -81,7 +86,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.6.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.7.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -871,6 +876,137 @@ def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> di
 
 
 # --------------------------------------------------------------------------- #
+# Down, or gone? — the descriptor check (optional, needs stem + a control port)
+# --------------------------------------------------------------------------- #
+
+DEFAULT_CONTROL_PORT = 9051
+DEFAULT_DESCRIPTOR_TIMEOUT = 60  # a fresh control connection may need a minute for its first HSDir circuit
+DESCRIPTOR_QUIET_SECONDS = 8     # after a FAILED, how long to wait for another HSDir before concluding
+
+
+class DescriptorChecker:
+    """An OFFLINE onion is one of two things: a service whose operator's tor is
+    still publishing its descriptor to the HSDirs but that does not answer
+    (overloaded, application down, rendezvous failing) — or one that is not
+    published at all, which is what "gone" looks like at the Tor layer. A plain
+    GET cannot tell them apart; the control port can: HSFETCH asks the HSDirs
+    for the descriptor and reports RECEIVED, or FAILED with a reason.
+
+    One control connection per run, opened on the first check, kept until
+    close(). Any problem with the connection is remembered and reported once
+    per target as "unknown" — the check never aborts a run. Tor emits one
+    FAILED per HSDir it tried, with no aggregate event, so "not published" is
+    concluded only after a FAILED followed by a quiet period, never on the
+    first one.
+    """
+
+    def __init__(self, port: int = DEFAULT_CONTROL_PORT, socket_path: str | None = None,
+                 timeout: float = DEFAULT_DESCRIPTOR_TIMEOUT):
+        self.port, self.socket_path, self.timeout = port, socket_path, timeout
+        self.ctl = None
+        self.error: str | None = None      # a connection problem, remembered for the run
+        self.error_reported = False        # so that main() prints the reason once
+        self.checks = 0
+        self._events: list = []
+
+    def _connect(self) -> bool:
+        if self.ctl is not None:
+            return True
+        if self.error:
+            return False
+        try:
+            import stem  # noqa: F401  (optional dependency: pip install stem)
+            import stem.connection
+            import stem.control
+        except ImportError:
+            self.error = "stem is not installed (pip install stem)"
+            return False
+        try:
+            ctl = (stem.control.Controller.from_socket_file(self.socket_path) if self.socket_path
+                   else stem.control.Controller.from_port(port=self.port))
+        except stem.SocketError as e:
+            self.error = f"control port unreachable ({self.socket_path or self.port}): {e}"
+            return False
+        try:
+            ctl.authenticate()
+        except stem.connection.AuthenticationFailure as e:
+            ctl.close()
+            self.error = f"control port authentication failed: {e}"
+            return False
+        try:
+            ctl.add_event_listener(self._on_event, stem.control.EventType.HS_DESC)
+        except Exception as e:  # too old a tor for HS_DESC, SETEVENTS refused, socket gone: still "unknown", never a crash
+            ctl.close()
+            self.error = f"control port cannot deliver HS_DESC events: {e}"
+            return False
+        self.ctl = ctl
+        return True
+
+    def _on_event(self, event) -> None:
+        self._events.append(event)  # called from stem's event thread; list.append is atomic
+
+    def check(self, host: str) -> tuple[str, str]:
+        """(verdict, detail): published / not_published / unknown."""
+        m = re.search(r"([a-z2-7]{56})\.onion$", host.lower())
+        if not m:
+            return "unknown", "not a v3 onion address"
+        if not self._connect():
+            return "unknown", self.error or "no control connection"
+        addr = m.group(1)  # the service address itself; a subdomain (forum.<addr>.onion) is not part of it
+        self._events.clear()
+        try:
+            reply = self.ctl.msg(f"HSFETCH {addr}")
+            if not reply.is_ok():
+                return "unknown", f"HSFETCH refused: {str(reply).strip()[:80]}"
+        except Exception as e:  # stem raises several types here; none may abort the run
+            return "unknown", f"HSFETCH failed: {e}"
+
+        def mine() -> list:
+            return [ev for ev in list(self._events) if (getattr(ev, "address", "") or "").lower() == addr]
+
+        deadline = time.monotonic() + self.timeout
+        seen = 0
+        last_change = time.monotonic()
+        quiet = False
+        while time.monotonic() < deadline:
+            evs = mine()
+            if len(evs) != seen:
+                seen, last_change = len(evs), time.monotonic()
+            if any(ev.action == "RECEIVED" for ev in evs):
+                break
+            failed = sum(1 for ev in evs if ev.action == "FAILED")
+            outstanding = sum(1 for ev in evs if ev.action == "REQUESTED") - failed
+            # Tor asks the HSDirs one after another and emits one FAILED per
+            # directory, never a summary. "Not published" needs a FAILED, no
+            # request still in flight, and a quiet period with nothing new.
+            if failed and outstanding <= 0 and time.monotonic() - last_change > DESCRIPTOR_QUIET_SECONDS:
+                quiet = True
+                break
+            time.sleep(0.25)
+        self.checks += 1
+        evs = mine()  # final snapshot: an answer that landed after the last poll still counts
+        if any(ev.action == "RECEIVED" for ev in evs):
+            return "published", "descriptor fetched from the HSDirs — the service is announced, whatever it answers"
+        failed = [ev for ev in evs if ev.action == "FAILED"]
+        reasons = sorted({str(getattr(ev, "reason", "") or "?") for ev in failed})
+        if not failed:
+            return "unknown", f"no answer from the HSDirs within {self.timeout:.0f}s"
+        if reasons != ["NOT_FOUND"]:
+            return "unknown", f"HSDir lookup failed: {', '.join(reasons)}"
+        if quiet:
+            return "not_published", f"no descriptor on the HSDirs ({len(failed)} × NOT_FOUND)"
+        return "unknown", f"{len(failed)} × NOT_FOUND, but a lookup was still in progress at the {self.timeout:.0f}s deadline"
+
+    def close(self) -> None:
+        if self.ctl is not None:
+            try:
+                self.ctl.close()
+            except Exception:
+                pass
+            self.ctl = None
+
+
+# --------------------------------------------------------------------------- #
 # Report
 # --------------------------------------------------------------------------- #
 
@@ -951,7 +1087,14 @@ def write_html_report(results: list[dict], out_path: Path,
     lines.append(f"<h1>Offline ({len(offline)})</h1><p>No response at all.</p><ol>")
     for r in offline:
         detail = r.get("error_class") or r.get("error") or "no detail"
-        lines.append(f"<li><span class='lbl bad'>{_esc(detail)}</span> {_esc(r['name'])} — {_esc(r['uri'])}</li>")
+        desc = ""
+        if r.get("descriptor") == "published":
+            desc = " — <span class='lbl warn'>published, not responding</span>"
+        elif r.get("descriptor") == "not_published":
+            desc = " — <span class='lbl bad'>not published</span>"
+        elif r.get("descriptor"):
+            desc = f" — <span class='dim'>descriptor {_esc(r['descriptor'])}</span>"
+        lines.append(f"<li><span class='lbl bad'>{_esc(detail)}</span> {_esc(r['name'])} — {_esc(r['uri'])}{desc}</li>")
     lines.append("</ol>")
 
     if excluded:
@@ -1070,8 +1213,11 @@ def diff_runs(old: dict, new: dict) -> dict:
             for (field, ov), (_, nv) in zip(_online_fields(o), _online_fields(n)):
                 if ov != nv:
                     changes.append({"field": field, "old": ov, "new": nv})
-        elif o.get("error_class") != n.get("error_class"):
-            changes.append({"field": "error", "old": o.get("error_class"), "new": n.get("error_class")})
+        elif n["status"] == "OFFLINE":
+            if o.get("error_class") != n.get("error_class"):
+                changes.append({"field": "error", "old": o.get("error_class"), "new": n.get("error_class")})
+            if o.get("descriptor") and n.get("descriptor") and o["descriptor"] != n["descriptor"]:
+                changes.append({"field": "descriptor", "old": o["descriptor"], "new": n["descriptor"]})
         if "indices" in o and "indices" in n:
             ov, nv = o["indices"].get("verdict"), n["indices"].get("verdict")
             if ov != nv:
@@ -1600,6 +1746,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     b.add_argument("--exclusions", type=Path, metavar="FILE",
                    help="persisted do-not-fetch list: read before the run, appended on every exclusion "
                         "(<host> <date> term:<term> where:<label|title|meta>)")
+    d = p.add_argument_group("descriptor", "down, or gone? — ask the Tor control port whether an OFFLINE onion "
+                                           "is still published on the HSDirs (needs the stem package)")
+    d.add_argument("--descriptor", action="store_true",
+                   help="after an OFFLINE .onion, HSFETCH its descriptor: published / not_published / unknown")
+    d.add_argument("--control-port", type=int, default=DEFAULT_CONTROL_PORT, metavar="PORT",
+                   help=f"Tor control port (default: {DEFAULT_CONTROL_PORT}; Tor Browser's own tor listens on 9151)")
+    d.add_argument("--control-socket", metavar="PATH", help="Tor control socket, instead of a port")
+    d.add_argument("--descriptor-timeout", type=float, default=DEFAULT_DESCRIPTOR_TIMEOUT, metavar="SECONDS",
+                   help=f"per lookup (default: {DEFAULT_DESCRIPTOR_TIMEOUT}; the first one may need most of it)")
     return p.parse_args(argv)
 
 
@@ -1677,6 +1832,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.controls_every < 0:
         print("--controls-every must be 0 or a positive number", file=sys.stderr)
         return 2
+    if args.descriptor and args.descriptor_timeout <= 0:
+        print("--descriptor-timeout must be a positive number of seconds", file=sys.stderr)
+        return 2
     indices: Indices | None = Indices(sources) if sources else None
 
     session = requests.Session()
@@ -1708,6 +1866,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3 if any(s.error for s in sources) else 0
 
     stop = StopRule(args.stop_terms, args.exclusions)
+    descriptors = DescriptorChecker(args.control_port, args.control_socket, args.descriptor_timeout) if args.descriptor else None
     journal = Journal(args.journal) if args.journal else None
     done: dict[str, dict] = journal.load() if journal else {}
     pending = [(name, uri) for name, uri in targets if record_key(uri) not in done]
@@ -1752,6 +1911,13 @@ def main(argv: list[str] | None = None) -> int:
             r = apply_stop_rule(stop, name, uri, check_one(name, uri, session, cfg))
             if indices is not None and r["status"] != "EXCLUDED":
                 r["indices"] = indices.lookup(uri, label=name, title=r.get("title") or "")
+            if descriptors is not None and r["status"] == "OFFLINE" and is_onion(uri):
+                r["descriptor"], r["descriptor_detail"] = descriptors.check(host_of(uri))
+                if descriptors.error and descriptors.error_reported:
+                    print("  descriptor: unknown (same reason as above)", file=sys.stderr)
+                else:
+                    print(f"  descriptor: {r['descriptor']} — {r['descriptor_detail']}", file=sys.stderr)
+                    descriptors.error_reported = bool(descriptors.error)
         measured.append(r)
         if journal:
             journal.append(r)
@@ -1818,6 +1984,17 @@ def main(argv: list[str] | None = None) -> int:
         print_indices_summary(indices, [r for r in results if "indices" in r])
         if any(src.error for src in indices.sources):
             exit_code = 3
+    if descriptors is not None:
+        descriptors.close()
+        dcount = {"published": 0, "not_published": 0, "unknown": 0}
+        for r in offline:
+            if r.get("descriptor") in dcount:
+                dcount[r["descriptor"]] += 1
+        if any(dcount.values()):
+            print(f"Descriptors of the offline: {dcount['published']} published (down, not gone), "
+                  f"{dcount['not_published']} not published (gone at the Tor layer), {dcount['unknown']} unknown.", file=sys.stderr)
+        if descriptors.error:
+            print(f"  descriptor check: {descriptors.error}", file=sys.stderr)
     if controls:
         ok = sum(1 for c in controls if c["status"] == "ONLINE")
         print(f"Controls: {ok}/{len(controls)} online.", file=sys.stderr)

@@ -7,6 +7,45 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-15
+
+### Added
+- **Down, or gone? — `--descriptor`.** For every OFFLINE `.onion`, one more
+  question through the Tor control port: `HSFETCH`, and the HSDirs' answer.
+  `descriptor` is `published` (the operator's tor still announces the
+  service — down, not gone), `not_published` (nothing on the directories —
+  gone at the Tor layer) or `unknown` (with the reason: no `stem`, control
+  port unreachable, authentication failed, other HSDir failure, no answer in
+  time); `descriptor_detail` says it in words. One control connection per
+  run; a connection or authentication problem is remembered for the run,
+  printed once, recorded in every affected record, and never aborts
+  anything. "Not published" is concluded only when a `FAILED` has arrived,
+  no request is still in flight and a quiet period has passed — tor emits
+  one `REQUESTED` and one `FAILED` per HSDir it tries and no aggregate event;
+  a deadline reached with a lookup in progress is `unknown`. A subdomain
+  (`forum.<address>.onion`) is asked about `<address>`.
+  `--control-port` (default 9051; Tor Browser's tor is 9151),
+  `--control-socket`, `--descriptor-timeout` (default 60 s). `stem` is an
+  optional dependency (`pip install stem`, or the `descriptor` extra).
+- The HTML report labels offline lines *published, not responding* / *not
+  published*; the summary counts them; `diff` reports a change of
+  `descriptor` between runs.
+- README: *What this is not* — what the Tor Project's Onionprobe is for
+  (monitoring endpoints you operate: loop, retries, TLS, Prometheus,
+  Grafana, Alertmanager) and what this tool is for instead.
+- 12 offline tests with a scripted fake `stem` (published; FAILED then
+  silence; FAILED then RECEIVED; an outstanding request blocking the quiet
+  period; RECEIVED just before the deadline; deadline with a lookup in
+  flight; other reasons; connection, authentication and event-subscription
+  failures remembered and not retried; HSFETCH refused; without stem; the
+  control socket; subdomain and upper-case hosts; only offline onions are
+  asked; the reason printed once; diff and report); 98 in all. Verified for
+  real through Tor Browser's control port: a freshly generated,
+  never-published v3 address came back `6 × NOT_FOUND`, and a live service
+  `RECEIVED` in under 2 s. An adversarial review (3 lenses, 3 refuters per
+  finding) produced 17 findings; 14 confirmed, all addressed, and the 3
+  refuted ones handled where the fix was cheap.
+
 ## [0.6.0] — 2026-09-15
 
 ### Added
@@ -272,7 +311,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.3.0...v0.4.0
