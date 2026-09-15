@@ -2,7 +2,7 @@
   "Ahmia": {
     "checked": "2026-09-15",
     "files": 1,
-    "hosts": 9025,
+    "hosts": 9022,
     "kind": "crawler",
     "names": 0,
     "origin": "https://ahmia.fi/onions/"
@@ -14,6 +14,14 @@
     "kind": "tracker",
     "names": 807,
     "origin": "https://raw.githubusercontent.com/GavinEke/OGransomwatch/main/groups.json"
+  },
+  "OnionLand Search": {
+    "checked": "2026-09-15",
+    "kind": "search",
+    "origin": "http://3bbad7fauom4d6sgppalyqddsqbf5u5p56b5k5uk2zxsy3d6ey2jobad.onion/search?q={query}",
+    "probes_found": 1,
+    "probes_total": 2,
+    "results_hosts": 6
   },
   "SecureDrop directory": {
     "checked": "2026-09-15",

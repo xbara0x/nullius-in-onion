@@ -11,9 +11,11 @@ answer to *who already lists it?*
 
 **What qualifies as an index.** A page (or file, or JSON endpoint) that
 
-1. **enumerates addresses** — many of them, in one request; a search engine
-   that must be queried per address is a different mechanism and is not
-   (yet) a source;
+1. **enumerates addresses** — many of them, in one request — **or answers a
+   query per address** (kind `search`, `{query}` in the URL): a search
+   engine qualifies when the probe finds at least one control target through
+   it and no probe fails — the probe tests the mechanism, not the engine's
+   coverage;
 2. **has an operator that can be named** — a person, project or
    organization that stands behind the list, with a way to reach them. This
    is the line between an index and a link dump: a "hidden wiki" clone with
@@ -24,9 +26,9 @@ answer to *who already lists it?*
    bare v3 addresses (JSON included); it will not render a page.
 
 **What does not qualify:** link dumps and mirrors lists without an operator;
-sources whose purpose is content the stop rule exists to avoid; search
-engines (for now); the tool's own targets (a service is a *target*, not an
-*index* — even if it links to a few friends).
+sources whose purpose is content the stop rule exists to avoid; the tool's
+own targets (a service is a *target*, not an *index* — even if it links to a
+few friends).
 
 **Pick the kind honestly.** `curated` means a person verified identity (PGP,
 ownership proof); `crawler` means a robot reached it; `institutional` means
@@ -44,7 +46,10 @@ python3 nullius.py indices --indices path/to/your-sources.txt
 with a one-line file containing your source, and paste the table line into
 the PR (name, kind, hosts, names, status). `EMPTY`, `FAILED` or a count that
 looks nothing like what the page shows means the loader does not understand
-the page — say so in the PR instead of adjusting the count.
+the page — say so in the PR instead of adjusting the count. For a search
+engine the line must read `OK` or `NEW` (`k/N probes found`, no probe failed):
+the engine answered address queries through the query path you gave and the
+parser read at least one control target out of its results.
 
 **The card** in `SOURCES.md` follows the existing ones: what it is, who runs
 it, how it decides what to list, what "listed by" therefore means, since

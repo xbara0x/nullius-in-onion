@@ -155,6 +155,57 @@ verba*.
   honest.
 - **Since:** 2026-09-15 · **Sources:** [deepdarkCTI](https://github.com/fastfire/deepdarkCTI)
 
+## search
+
+A search engine is queried per target — one request per address — and what
+it proves is robot-grade: the engine's crawler reached the address at some
+point. A target listed *only* by search engines and crawler lists is flagged
+`crawler_only`. Every engine here was probed through Tor with the onion control
+targets and answered for at least one of them without a single failed probe;
+the query path is part of what the probe verified.
+
+### OnionLand Search
+- **URL:** `http://3bbad7fauom4d6sgppalyqddsqbf5u5p56b5k5uk2zxsy3d6ey2jobad.onion/search?q={query}` · **kind:** search
+- **What:** a crawler-based search engine over Tor onion services, I2P and
+  selected clearnet pages, with a clearnet mirror at
+  `onionlandsearchengine.net`. Ad-supported; no editorial curation.
+- **Operator:** anonymous, since 2019; the site publishes about, advertising
+  and contact pages and its own mirrors.
+- **How it answers an address query:** a query for a full `.onion` address
+  returns the pages it has crawled under that address; the result link is an
+  opaque redirect (`/r?s=…`) and the address is written out as text next to
+  it — the shape that made the parser count addresses shown with their
+  scheme. A query for an address it has not crawled returns "0 results".
+- **Probe, 2026-09-15:** DuckDuckGo's onion came back (4 results); Ahmia's
+  onion returned 0 results — coverage, not a failure. `1/2 probes found`, no
+  probe failed.
+- **"Listed by" means:** OnionLand's crawler reached the address. Nothing
+  about identity.
+- **Since:** 2026-09-15 · **Sources:** [onionlandsearchengine.net](https://onionlandsearchengine.net/),
+  [Avira: dark web search engines (2026)](https://www.avira.com/en/blog/best-darknet-search-engines),
+  [Cyble: top dark web search engines](https://cyble.com/knowledge-hub/top-10-dark-web-search-engines/)
+
+**Probed and not included (2026-09-15, controls 3/3):**
+
+- **Amnesia** answers an address query with *"returned 0 results"* even for
+  DuckDuckGo's onion — a keyword engine that does not answer "do you list this
+  address?". Also ad-heavy.
+- **Tordex** answers `HTTP 400` to both `?query=` and `?q=`; the query path
+  is unknown to us.
+- **Torch, Haystak, DarkSearch** did not answer at the addresses we had
+  (timeout / hidden service unreachable) while the controls were green; the
+  addresses may have aged. Candidates for a later probe.
+
+- **Ahmia's search is not a `search` source, by design of both sides.** Its
+  search form (clearnet and onion alike) carries a hidden per-session
+  anti-automation token — a random field name and value tied to a cookie —
+  and a query without it is answered with `302 → /`. Playing that token means
+  emulating a browser session, which this tool does not do. Ahmia is in the
+  registry as what it publishes for machines: the `/onions/` list (kind
+  `crawler`). Checked 2026-09-15 through Tor: with the token the result page
+  lists 202 addresses behind `/search/redirect?…redirect_url=http://…onion`
+  links, the shape the parser reads; without it, nothing.
+
 ---
 
 ## Considered, not included

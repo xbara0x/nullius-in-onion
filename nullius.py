@@ -7,9 +7,9 @@ For each target: ONE plain HTTP GET through the local Tor SOCKS proxy, then
 the status code and the page <title>. No JavaScript, no images, no forms, no
 login, no crawling. Optionally, every target is also looked up in a set of
 index sources — the registry shipped in indices/sources.txt (each with a
-kind: curated, crawler, institutional, tracker, community) and/or your own
-— to say who already lists that address or that name, and how much that is
-worth. `diff` compares two result files of the same list and reports what
+kind: curated, crawler, institutional, tracker, community, search) and/or
+your own — to say who already lists that address or that name, and how much
+that is worth. A search source ({query} in its URL) is asked per target. `diff` compares two result files of the same list and reports what
 moved, with both runs' circuit controls in view. `indices` checks the
 sources themselves.
 
@@ -69,7 +69,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from html import unescape as html_unescape
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 import urllib3
@@ -80,7 +81,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.5.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.6.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -278,9 +279,13 @@ SOURCE_KINDS = {
     "institutional": "the operator itself publishes the address (onion.torproject.org, SecureDrop)",
     "tracker": "a thematic tracker maintains it (ransomware leak sites)",
     "community": "a list curated by pull request (deepdarkCTI, real-world-onion-sites)",
+    "search": "a search engine queried per target with the address — crawler-grade evidence, one request per target",
     "self": "your own catalog or bookmarks (--catalog)",
 }
 UNSPECIFIED_KIND = "unspecified"
+QUERY_PLACEHOLDER = "{query}"  # in a source URL: the source is queried per target instead of downloaded
+ROBOT_KINDS = {"crawler", "search"}  # "listed" by these says reachable, not who
+SEARCH_RESULT_ONION_RE = re.compile(r"https?://([a-z2-7]{56}\.onion)")
 
 
 class Source:
@@ -302,6 +307,8 @@ class Source:
         self.named: list[tuple[list[str], frozenset[str], dict]] = []
         self.files = 0
         self.error: str | None = None
+        self.queries = 0          # search sources: answered queries
+        self.query_failures = 0   # search sources: queries that got no usable answer
 
     @property
     def names(self) -> int:
@@ -314,6 +321,95 @@ class Source:
     @property
     def kind_known(self) -> bool:
         return self.kind in SOURCE_KINDS or self.kind == UNSPECIFIED_KIND
+
+    @property
+    def is_search(self) -> bool:
+        """Queried per target ("{query}" in the URL) instead of downloaded once.
+        Only a URL can be a search source; a local path is a list."""
+        return self.is_remote and QUERY_PLACEHOLDER in self.origin
+
+    @property
+    def kind_matches_mechanism(self) -> bool:
+        """A URL with {query} must be kind "search", and only such a URL may be."""
+        return self.is_search == (self.kind == "search")
+
+    # -- search: one query per target ---------------------------------------
+    def query_url(self, host: str) -> str:
+        return self.origin.replace(QUERY_PLACEHOLDER, quote(host, safe=""))
+
+    def results_for(self, html_text: str, host: str, final_url: str = "") -> tuple[list[dict], int]:
+        """The result entries that point at `host`, and how many distinct onion
+        hosts the page showed at all. The query is echoed in the page — in the
+        title, the search box, "results for …", pagination and related-search
+        links — and an echo is not a result. Two things are:
+
+        * a **link**: an anchor to another site counts by its host; an anchor
+          into the engine itself (a redirect) counts only for an address that
+          appears in it with its scheme (`redirect?url=http://x.onion`), which
+          a pagination link (`?q=x.onion&page=2`) never has;
+        * an **address written out with its scheme in the visible text**
+          (`http://x.onion/` next to a result whose link is an opaque redirect
+          — OnionLand's shape). The echo is the query as typed, a bare host, so
+          it never carries a scheme; tags and attribute values are not text.
+
+        The engine is its configured host and, when the query was redirected,
+        the host that answered (a mirror)."""
+        engines = {host_of(self.origin)} | ({host_of(final_url)} if final_url else set())
+        engines.discard("")
+        hits: list[dict] = []
+        onion_hosts: set[str] = set()
+        hit_hosts: set[str] = set()
+        text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", html_text)
+        text = re.sub(r"\s+", " ", text)  # an anchor's text may span source lines; only block tags delimit here
+        text = re.sub(r"(?i)</?(p|br|li|div|h[1-6]|tr|td|th|section|article|cite)\b[^>]*>", "\n", text)
+        last_anchor_name = ""
+
+        def add(found: set[str], name: str, how: str) -> None:
+            found -= engines
+            onion_hosts.update(h for h in found if h.endswith(".onion"))
+            if host in found and len(hits) < 5:
+                hits.append({"source": self.name, "kind": self.kind, "name": name, "host": host,
+                             "where": f"search results for {host} ({how})", "line": 0})
+
+        for line in text.splitlines():
+            for href, inner in HTML_LINK_RE.findall(line):
+                href = "http:" + href if href.startswith("//") else href  # protocol-relative is absolute too
+                href_host = host_of(href) if "://" in href else ""
+                name = html_unescape(TAG_RE.sub("", inner)).strip()[:80]
+                if name:
+                    last_anchor_name = name
+                if href_host and href_host not in engines:
+                    add({href_host}, name, "link")
+                else:
+                    add(set(SEARCH_RESULT_ONION_RE.findall(unquote(href).lower())), name, "redirect link")
+            visible = TAG_RE.sub(" ", line)
+            for url in re.findall(r"https?://[^\s<>\"'()]+", visible, re.IGNORECASE):
+                add({host_of(url)}, last_anchor_name, "address shown as text")
+        return hits, len(onion_hosts)
+
+    def query(self, host: str, session: requests.Session, cfg: "Config") -> tuple[list[dict], str | None, int]:
+        """Ask the engine about one address. Returns (entries, failure, distinct
+        onion hosts in the answer). A failure is anything that is not a results
+        page: an error, a redirect away from the query (to the home page, a
+        captcha, a "use our onion" notice), or a page with no links at all."""
+        url = self.query_url(host)
+        try:
+            resp, _ = fetch(url, session, cfg)
+        except requests.exceptions.RequestException as e:
+            self.query_failures += 1
+            return [], classify_error(e, url), 0
+        if resp.status_code >= 400:
+            self.query_failures += 1
+            return [], f"HTTP {resp.status_code}", 0
+        if quote(host, safe="") not in resp.url and host not in unquote(resp.url):
+            self.query_failures += 1
+            return [], f"redirected away from the query (to {urlparse(resp.url).path or '/'})", 0
+        if not HTML_LINK_RE.search(resp.text):
+            self.query_failures += 1
+            return [], "no links in the answer — not a results page", 0
+        self.queries += 1
+        hits, seen = self.results_for(resp.text, host, resp.url)
+        return hits, None, seen
 
     # -- loading -----------------------------------------------------------
     def load_local(self) -> None:
@@ -420,20 +516,43 @@ def registry_path() -> Path | None:
 
 
 class Indices:
-    """All sources of a run, loaded once, queried per target."""
+    """All sources of a run: list sources loaded once, search sources queried
+    per target, every source consulted per target."""
 
     def __init__(self, sources: list[Source]):
         self.sources = sources
+        self.session: requests.Session | None = None
+        self.cfg: "Config | None" = None
+
+    GIVE_UP_AFTER = 3  # consecutive failed queries with no answer ever: stop asking that engine
 
     def load(self, session: requests.Session | None, cfg: "Config | None") -> None:
+        self.session, self.cfg = session, cfg
+        remote_loaded = 0
         for src in self.sources:
+            if not src.kind_matches_mechanism:
+                continue  # reported as KIND?; never fetched
+            if src.is_search:
+                if session is None or cfg is None:
+                    src.error = "no session"
+                continue  # nothing to download; asked per target
             if src.is_remote:
                 if session is None or cfg is None:
                     src.error = "no session"
                 else:
+                    if remote_loaded:
+                        time.sleep(random.uniform(*cfg.delay))  # one request at a time, with a pause
                     src.load_remote(session, cfg)
+                    remote_loaded += 1
             else:
                 src.load_local()
+
+    def close_search_sources(self) -> None:
+        """After the run: a search engine that answered no query at all is a
+        failed source — its 'unlisted' verdicts mean nothing."""
+        for src in self.sources:
+            if src.is_search and not src.error and src.query_failures and not src.queries:
+                src.error = f"all {src.query_failures} queries failed"
 
     def lookup(self, uri: str, label: str = "", title: str = "") -> dict:
         host = host_of(uri)
@@ -448,6 +567,19 @@ class Indices:
         for src in self.sources:
             if src.error:
                 continue
+            if src.is_search:
+                assert self.session is not None and self.cfg is not None
+                if not src.queries and src.query_failures >= self.GIVE_UP_AFTER:
+                    # Never answered: stop paying a timeout per target for it.
+                    src.error = f"gave up after {src.query_failures} failed queries with no answer"
+                    failed.append(src.name)
+                    continue
+                time.sleep(random.uniform(*self.cfg.delay))  # one request at a time, with a pause, like everything else
+                hits, failure, _ = src.query(host, self.session, self.cfg)
+                if failure:
+                    failed.append(src.name)  # this target's "unlisted" is unreliable for this source
+                listed_in += hits
+                continue
             l, n = src.lookup(host, candidates)
             listed_in += l
             name_matches += n
@@ -455,9 +587,10 @@ class Indices:
         kinds = sorted({e["kind"] for e in listed_in})
         return {"verdict": verdict, "listed_in": listed_in, "name_matches": name_matches,
                 "listed_kinds": kinds,
-                # Listed, but only by robots: reachable once, identity unknown.
-                # On a real batch this is where the scam templates sat.
-                "crawler_only": bool(kinds) and kinds == ["crawler"],
+                # Listed, but only by robots (crawler lists, search engines):
+                # reachable once, identity unknown. On a real batch this is
+                # where the scam templates sat.
+                "crawler_only": bool(kinds) and set(kinds) <= ROBOT_KINDS,
                 "sources_failed": failed}
 
 
@@ -1083,15 +1216,56 @@ def health_path(sources_file: Path) -> Path:
     return sources_file.with_name(sources_file.stem + "-health.json")
 
 
-def source_status(src: "Source", last: dict | None) -> tuple[str, str]:
-    """(status, note). FAILED: did not load. KIND?: kind not in the vocabulary.
-    EMPTY: loaded, no addresses. CHANGED: the host count moved by more than
-    half against the last known — the page probably changed shape, or the
-    index itself did. NEW: no last known. OK otherwise."""
-    if src.error:
-        return "FAILED", src.error
+PROBE_HOSTS = [host_of(uri) for _, uri in CONTROL_TARGETS if host_of(uri).endswith(".onion")]
+
+
+def probe_search_source(src: "Source", session: requests.Session, cfg: "Config") -> dict:
+    """Ask a search engine about the onion control targets — services every
+    index knows — except itself, which it cannot list. Returns found, total,
+    distinct onion hosts seen in the answers, and the failures by probe."""
+    probes = [h for h in PROBE_HOSTS if h != host_of(src.origin)]
+    out = {"found": 0, "total": len(probes), "hosts": 0, "failures": []}
+    for i, host in enumerate(probes):
+        if i:
+            time.sleep(random.uniform(*cfg.delay))  # after every probe, answered or not
+        hits, failure, seen = src.query(host, session, cfg)
+        if failure:
+            out["failures"].append(failure)
+            continue
+        out["found"] += bool(hits)
+        out["hosts"] = max(out["hosts"], seen)
+    return out
+
+
+def source_status(src: "Source", last: dict | None, probe: dict | None = None) -> tuple[str, str]:
+    """(status, note). KIND?: kind not in the vocabulary, or a {query} URL that
+    is not kind search (and vice versa) — checked first, such a source is never
+    fetched. FAILED: did not load. EMPTY: loaded, no addresses. CHANGED: the
+    host count moved by more than half against the last known — the page
+    probably changed shape, or the index itself did. NEW: no last known. OK
+    otherwise. A search source is judged by its probe, which tests the
+    mechanism, not the index's coverage: at least one onion control target
+    (other than the engine itself) must come back when asked for, and no probe
+    may fail — an error, a redirect away, a page without links. PARTIAL:
+    something came back but a probe failed. FAILED: nothing came back."""
     if not src.kind_known:
         return "KIND?", f"unknown kind {src.kind!r}"
+    if not src.kind_matches_mechanism:
+        return "KIND?", ("URL has {query} but kind is not 'search'" if QUERY_PLACEHOLDER in src.origin
+                         else "kind 'search' without {query} in a URL")
+    if src.error:
+        return "FAILED", src.error
+    if src.is_search:
+        pr = probe or {"found": 0, "total": 0, "hosts": 0, "failures": ["not probed"]}
+        fails = f"; {len(pr['failures'])} probe(s) failed: {pr['failures'][-1]}" if pr["failures"] else ""
+        if not pr["found"]:
+            if pr["total"] and len(pr["failures"]) == pr["total"]:
+                return "FAILED", f"every probe failed: {pr['failures'][-1]}"
+            return "FAILED", (f"none of {pr['total']} probe addresses came back ({pr['hosts']} onion hosts in results) — "
+                              f"engine changed shape, or does not index them{fails}")
+        if pr["failures"]:
+            return "PARTIAL", f"{pr['found']}/{pr['total']} probes found, {pr['hosts']} onion hosts in results{fails}"
+        return ("NEW" if last is None else "OK"), f"{pr['found']}/{pr['total']} probes found, {pr['hosts']} onion hosts in results"
     n = len(src.hosts)
     if n == 0:
         return "EMPTY", "loaded, but no addresses in it"
@@ -1106,16 +1280,23 @@ def source_status(src: "Source", last: dict | None) -> tuple[str, str]:
 def indices_main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         prog=f"{Path(sys.argv[0]).name} indices",
-        description="Check the index sources themselves: load every source once, report how many "
-                    "addresses each yields, and compare with the last known count in the health "
-                    "file next to the sources file (<sources>-health.json). A source that fails, "
-                    "moved by more than half, or has an unknown kind makes the exit status 3.")
+        description="Check the index sources themselves: measure the circuit controls, load every "
+                    "source once, report how many addresses each yields, and compare with the last "
+                    "known count in the health file next to the sources file (<sources>-health.json). "
+                    "A failed control, or a source that fails, moved by more than half, or has an "
+                    "unknown kind, makes the exit status 3.")
     p.add_argument("--registry", action="store_true", help="the registry shipped with the project (indices/sources.txt)")
     p.add_argument("--indices", type=Path, metavar="FILE", help='a sources file, "Name | URL-or-path | kind" per line')
     p.add_argument("--update", action="store_true",
-                   help="write the current counts to the health file (failed sources keep their last known entry)")
+                   help="write the current counts to the health file; a source that did not pass "
+                        "(FAILED, EMPTY, PARTIAL, KIND?) keeps its last known entry")
     p.add_argument("--proxy", default=DEFAULT_PROXY, help=f"SOCKS proxy URL (default: {DEFAULT_PROXY})")
     p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help=f"seconds per request (default: {DEFAULT_TIMEOUT})")
+    p.add_argument("--delay", type=float, nargs=2, metavar=("MIN", "MAX"), default=DEFAULT_DELAY,
+                   help="random pause between requests — controls, source loads, probes (default: 2 5)")
+    p.add_argument("--no-controls", action="store_true",
+                   help="skip the circuit controls measured before the sources (not recommended: a dead circuit "
+                        "makes every remote source look FAILED)")
     args = p.parse_args(argv)
 
     files: list[Path] = []
@@ -1134,12 +1315,25 @@ def indices_main(argv: list[str]) -> int:
         print("indices: pass --registry and/or --indices FILE", file=sys.stderr)
         return 2
 
-    cfg = Config(proxy=args.proxy, timeout=args.timeout, delay=(1.0, 2.0))
+    cfg = Config(proxy=args.proxy, timeout=args.timeout, delay=tuple(args.delay))
     session = requests.Session()
     session.proxies = {"http": cfg.proxy, "https": cfg.proxy}
     session.headers["User-Agent"] = TOR_BROWSER_UA
 
     exit_code = 0
+    circuit_ok = True
+    if not args.no_controls:
+        # The same rule as a run: a batch of FAILED sources is far more often
+        # the circuit than the sources. Measure it first, say so, never
+        # record counts taken through a broken path.
+        controls = measure_controls(session, cfg, "start")
+        ok = sum(1 for c in controls if c["status"] == "ONLINE")
+        circuit_ok = ok == len(controls)
+        print(f"Controls: {ok}/{len(controls)} online."
+              + ("" if circuit_ok else "  <<< CIRCUIT SUSPECT — FAILED below may be the circuit, not the source; "
+                 "nothing is written to the health file"), file=sys.stderr)
+        if not circuit_ok:
+            exit_code = 3
     today = datetime.now().strftime("%Y-%m-%d")
     for sources_file in files:
         sources = read_sources(sources_file)
@@ -1152,14 +1346,20 @@ def indices_main(argv: list[str]) -> int:
         width = max((len(s.name) for s in sources), default=6)
         print(f"{'source':<{width}}  {'kind':<13} {'hosts':>6} {'names':>6}  status", flush=True)
         for src in sources:
-            status, note = source_status(src, health.get(src.name))
+            probe = probe_search_source(src, session, cfg) if src.is_search and not src.error and src.kind_matches_mechanism else None
+            status, note = source_status(src, health.get(src.name), probe)
             if status not in ("OK", "NEW"):
                 exit_code = 3
-            print(f"{src.name:<{width}}  {src.kind:<13} {len(src.hosts):>6} {src.names:>6}  {status}: {note}", flush=True)
-            if args.update and not src.error:
-                health[src.name] = {"kind": src.kind, "hosts": len(src.hosts), "names": src.names,
-                                    "files": src.files, "checked": today, "origin": src.origin}
-        if args.update:
+            hosts = probe["hosts"] if probe else len(src.hosts)
+            print(f"{src.name:<{width}}  {src.kind:<13} {hosts:>6} {src.names:>6}  {status}: {note}", flush=True)
+            if args.update and circuit_ok and status in ("OK", "NEW", "CHANGED"):
+                if probe:
+                    health[src.name] = {"kind": src.kind, "probes_found": probe["found"], "probes_total": probe["total"],
+                                        "results_hosts": probe["hosts"], "checked": today, "origin": src.origin}
+                else:
+                    health[src.name] = {"kind": src.kind, "hosts": hosts, "names": src.names,
+                                        "files": src.files, "checked": today, "origin": src.origin}
+        if args.update and circuit_ok:
             hp.write_text(json.dumps(health, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             print(f"Health: {hp}", file=sys.stderr)
     return exit_code
@@ -1380,7 +1580,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--catalog", type=Path, nargs="+", metavar="PATH",
                    help="add a local file or directory tree as an index source (shortcut for a path line in --indices)")
     p.add_argument("--indices-only", action="store_true",
-                   help="cross-check only; measure no target (remote indices are still fetched once)")
+                   help="cross-check only; measure no target (list sources are still fetched once, "
+                        "search engines still queried once per target)")
     p.add_argument("--diff-previous", action="store_true",
                    help="after the run, compare it with the most recent earlier run of the same list "
                         "in --out-dir and write <base>-diff.json")
@@ -1407,6 +1608,9 @@ def print_indices_summary(indices: "Indices", results: list[dict]) -> None:
         if src.error:
             print(f"  source {src.name}: FAILED ({src.error}) — 'unlisted' is unreliable this run",
                   file=sys.stderr)
+        elif src.is_search and src.query_failures:
+            print(f"  source {src.name}: {src.query_failures} of {src.queries + src.query_failures} queries failed — "
+                  "those records carry it in sources_failed", file=sys.stderr)
     counts = {"listed": 0, "name-match": 0, "unlisted": 0}
     for r in results:
         counts[r["indices"]["verdict"]] += 1
@@ -1460,6 +1664,10 @@ def main(argv: list[str] | None = None) -> int:
     for src in sources:
         if not src.kind_known:
             print(f"  source {src.name}: unknown kind {src.kind!r} (known: {', '.join(SOURCE_KINDS)})", file=sys.stderr)
+        if not src.kind_matches_mechanism:
+            print(f"source {src.name}: " + ("the URL has {query}, so the kind must be 'search'" if src.is_search
+                  else "kind 'search' needs {query} in the URL") + f" (kind given: {src.kind!r})", file=sys.stderr)
+            return 2
     if args.indices_only and not sources:
         print("--indices-only needs --registry, --indices and/or --catalog", file=sys.stderr)
         return 2
@@ -1476,17 +1684,21 @@ def main(argv: list[str] | None = None) -> int:
     session.headers["User-Agent"] = TOR_BROWSER_UA
 
     if indices is not None:
-        remote = sum(1 for s in sources if s.is_remote)
-        print(f"Loading {len(sources)} index source(s) ({remote} remote, via {cfg.proxy})...", file=sys.stderr)
+        remote = sum(1 for s in sources if s.is_remote and not s.is_search)
+        searches = sum(1 for s in sources if s.is_search)
+        print(f"Loading {len(sources) - searches} index source(s) ({remote} remote, via {cfg.proxy})"
+              + (f"; {searches} search engine(s) will be queried per target" if searches else "") + "...", file=sys.stderr)
         indices.load(session, cfg)
         for src in sources:
             print(f"  {src.name}: " + (f"FAILED ({src.error})" if src.error else
+                  "queried per target" if src.is_search else
                   f"{len(src.hosts)} hosts, {src.names} named entries, {src.files} file(s)"), file=sys.stderr)
 
     if args.indices_only:
         assert indices is not None
         results = [{"name": name, "uri": uri, "indices": indices.lookup(uri, label=name)}
                    for name, uri in targets]
+        indices.close_search_sources()
         args.out_dir.mkdir(parents=True, exist_ok=True)
         base = unique_base(args.out_dir, args.targets.stem + "-indices")
         json_path = args.out_dir / f"{base}.json"
@@ -1602,6 +1814,7 @@ def main(argv: list[str] | None = None) -> int:
     for r in caveat:
         print(f"  caveat: {r['name']} — {r.get('status_detail')}", file=sys.stderr)
     if indices is not None:
+        indices.close_search_sources()
         print_indices_summary(indices, [r for r in results if "indices" in r])
         if any(src.error for src in indices.sources):
             exit_code = 3

@@ -19,7 +19,7 @@ It never runs JavaScript, never logs in, never crawls, and never decides for
 you: it reports, with the reasons, and tells you when its own measurement
 cannot be trusted.
 
-**Status:** v0.5.0 — working and tested; the JSON layout may still change,
+**Status:** v0.6.0 — working and tested; the JSON layout may still change,
 and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
 
 <p align="center">
@@ -166,6 +166,7 @@ the source is, who runs it, how it decides what to list, and therefore what
 | `institutional` | the operator itself publishes the address | Tor Project's own services, SecureDrop directory |
 | `tracker` | a thematic tracker maintains it | OGransomwatch (ransomware leak sites) |
 | `community` | curated by pull request, one maintainer reviewing | real-world-onion-sites, Wikipedia's list, deepdarkCTI |
+| `search` | a search engine **queried per target** with the address — crawler-grade evidence | OnionLand Search |
 | `self` | your own catalog or bookmarks | whatever you pass with `--catalog` |
 
 The registry is the part of this project that grows by contribution: one
@@ -184,15 +185,16 @@ my bookmarks  | ~/notes/onions.md   | self
 team catalog  | ../deepdarkCTI      | community
 ```
 
-Remote sources are fetched **once per run**, through the same Tor proxy as
-everything else. Local paths (a file or a whole directory tree) are read from
-disk, relative to the sources file. `--catalog PATH` is a shortcut for one
-local source of kind `self`. `--registry`, `--indices` and `--catalog`
-combine.
+List sources are fetched **once per run**, through the same Tor proxy as
+everything else, one after another with the usual pause; a search source
+(below) is asked once per target instead. Local paths (a file or a whole
+directory tree) are read from disk, relative to the sources file. `--catalog
+PATH` is a shortcut for one local source of kind `self`. `--registry`,
+`--indices` and `--catalog` combine.
 
 ```mermaid
 flowchart LR
-    subgraph sources ["index sources — loaded once per run"]
+    subgraph sources ["list sources — loaded once per run · search engines — asked per target"]
         direction TB
         S1["dark.fail · <b>curated</b><br/><i>remote, via Tor</i>"]
         S2["tor.taxi · <b>curated</b><br/><i>remote, via Tor</i>"]
@@ -233,17 +235,57 @@ Each record gains an `indices` block with a verdict and the evidence:
 **Two things to keep in mind.** *Listed* means different things for different
 kinds: `listed by tor.taxi (curated)` is an identity claim; `listed by ahmia
 (crawler)` means "was reachable once", nothing more. A target listed **only by
-crawlers** is flagged `crawler_only` in the record, in the terminal summary
-and in the report — on a real batch of 1,038 addresses, that is exactly
-where 33 market "mirrors" with identical titles sat: reachable, in no curated
-index, a scam template. And a source that could not be loaded (unreachable,
+robots** — crawler lists and search engines — is flagged `crawler_only` in
+the record, in the terminal summary and in the report — on a real batch of
+1,038 addresses, that is exactly where 33 market "mirrors" with identical
+titles sat: reachable, in no curated index, a scam template. And a source that could not be loaded (unreachable,
 HTTP error, or a page that came back with no addresses in it because its
 format changed) is reported as failed and makes the exit status `3`: an
 `unlisted` from a run with a failed source is not a result.
 
+**Search engines — queried per target.** Most onion search engines have no
+list to download; they answer one address at a time. A source whose URL
+contains `{query}` is that kind of source: for every target the tool asks the
+engine about the target's host and reads the result page — and only the
+**links** on it count, because the query is echoed in the page text and in the
+pagination links, and an echo is not a result. A link to another site counts
+by its host; a link back into the engine (a redirect) counts only when the
+address appears in it with its scheme, which a pagination link never has.
+
+```
+# in a sources file — kind "search" and {query} go together; the URL must be remote
+Some engine | http://<its address>.onion/search?q={query} | search
+```
+
+Three honest caveats. It costs **one request per target per engine**, with
+the same pause as everything else, so a long list gets longer. A query
+**tells the engine which address you are interested in**; downloading a list
+tells it nothing — through Tor the engine does not learn who asked, but it
+learns what. And what counts as a result is deliberately narrow — a link to
+the address, or the address written out with its scheme next to an opaque
+result link — so an engine with yet another shape produces false negatives,
+never false positives.
+
+An answer that is not a results page is a **failure, not "nothing listed"**:
+an error, a redirect away from the query (to the home page, a captcha, a
+"use our onion" notice — Ahmia does exactly this for a query without its
+per-session form token), or a page with no links at all. A failed query puts
+the engine in that record's `sources_failed`; an engine that has answered
+nothing after three failed queries is not asked again in that run, and an
+engine that answered no query at all is a failed source (exit `3`). The
+registry ships one engine, OnionLand; every other candidate was probed
+through Tor and its card in `SOURCES.md` says why it is not there.
+
 **Checking the sources themselves.** Indices die and change layout. `nullius
-indices --registry` loads every source once and reports what each yields
-against the last known count in `indices/sources-health.json`:
+indices --registry` measures the circuit controls first — a batch of `FAILED`
+sources is far more often the circuit than the sources, and a check taken
+through a broken path records nothing — then loads every source once and
+reports what each yields against the last known count in
+`indices/sources-health.json`; a search engine is probed instead — asked about
+the onion control targets, which every index knows (except itself) — and
+passes when at least one comes back and **no probe fails**: the probe tests
+the mechanism, not the engine's coverage. Something back but a probe failed
+is `PARTIAL`:
 
 ```
 source                         kind           hosts  names  status
@@ -253,9 +295,11 @@ some-list                      community         12      9  CHANGED: 800 -> 12 h
 another                        curated            0      0  FAILED: HTTP 404
 ```
 
-`FAILED`, `EMPTY`, `CHANGED` (moved by more than half) or an unknown kind make
-the exit status `3`; `--update` writes the current counts back, keeping the
-last known entry of a source that failed. Works on your own file too:
+A failed control, `FAILED`, `EMPTY`, `PARTIAL`, `CHANGED` (moved by more than
+half), an unknown kind, or a `{query}` URL that is not kind `search` (and vice
+versa — such a source is never fetched) make the exit status `3`; `--update`
+writes the current counts back (only with the controls green), and a source
+that did not pass keeps its last known entry. Works on your own file too:
 `nullius indices --indices my-sources.txt`.
 
 <details>
@@ -446,8 +490,8 @@ clearnet entry must be the whole host.
 
 `diff OLD.json NEW.json [--json PATH]` compares two result files — see
 [What changed since last time](#what-changed-since-last-time--diff).
-`indices [--registry] [--indices FILE] [--update]` checks the index sources
-themselves — see [Who lists it](#who-lists-it--index-cross-check).
+`indices [--registry] [--indices FILE] [--update] [--no-controls]` checks the
+index sources themselves — see [Who lists it](#who-lists-it--index-cross-check).
 
 ### Files
 
@@ -500,8 +544,10 @@ A journal is the same records, one per line, plus checkpoint lines:
 
 With `--registry`, `--indices` or `--catalog`, every record also carries
 `indices`: `verdict`, `listed_in`, `name_matches` (each entry: `source`,
-`kind`, `name`, `host`, `where`, `line`), `listed_kinds` (sorted, unique),
-`crawler_only`, `sources_failed`.
+`kind`, `name`, `host`, `where`, `line` — `0` for a search result),
+`listed_kinds` (sorted, unique), `crawler_only` (listed only by `crawler` /
+`search` sources), `sources_failed` (the run's failed sources, plus any
+search engine whose query for *this* target failed).
 
 A diff file: `old` and `new` (`file`, `checked_at`, `targets`, `controls` as
 `{online, total}` or `null`), `old_suspect`, `new_suspect`, the buckets
@@ -515,7 +561,7 @@ their total.
 |---|---|
 | `0` | run completed and can be trusted — for `diff`: no differences |
 | `1` | `diff` only: differences found, both runs trustworthy |
-| `3` | run completed, but **do not trust its negatives**: a control target failed (circuit suspect) or an index source failed to load; with `--controls-every`, the run stopped at a failed checkpoint — for `diff`: differences found, but one side's controls failed — for `indices`: a source failed, came back empty, moved by more than half, or has an unknown kind |
+| `3` | run completed, but **do not trust its negatives**: a control target failed (circuit suspect) or an index source failed to load; with `--controls-every`, the run stopped at a failed checkpoint — for `diff`: differences found, but one side's controls failed — for `indices`: a control failed, or a source failed, came back empty, passed only part of its probe, moved by more than half, or has an unknown kind |
 | `2` | usage error |
 
 Anything else is a crash. Scripts and cron jobs should treat any non-zero

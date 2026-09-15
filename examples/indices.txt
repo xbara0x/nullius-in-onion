@@ -1,6 +1,6 @@
 # A sources file of your own, one per line:  Name | URL-or-path | kind
-# Lines starting with # are ignored. Remote sources are fetched once per run
-# through the proxy; local paths are read from disk, relative to this file.
+# Lines starting with # are ignored. Remote list sources are fetched once per
+# run through the proxy; local paths are read from disk, relative to this file.
 # The kind (optional) says what "listed by" means — see indices/sources.txt.
 #
 # The project's registry of public indices ships in indices/sources.txt; use it
@@ -9,6 +9,10 @@
 # my bookmarks   | ~/notes/onions.md           | self
 # team catalog   | ../deepdarkCTI              | community
 # a saved page   | saved/dread-links.html      | community
+#
+# A search engine is queried per target: put {query} where the address goes
+# in its URL, and the kind must be "search". One request per target per engine.
+# some engine    | http://<its address>.onion/search?q={query} | search
 #
 # The three below are also in the registry; they stay here so that a file of
 # your own has a working starting point.

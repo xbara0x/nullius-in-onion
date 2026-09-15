@@ -833,7 +833,7 @@ class Registry(unittest.TestCase):
         hp = osc.health_path(self.sources)
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc = osc.main(["indices", "--indices", str(self.sources)])
+            rc = osc.main(["indices", "--indices", str(self.sources), "--no-controls"])
         self.assertEqual(rc, 3)                                   # the unknown kind
         text = out.getvalue()
         self.assertIn("Curated One", text); self.assertIn("NEW: 2 hosts", text)
@@ -842,7 +842,7 @@ class Registry(unittest.TestCase):
         # fix the kind, update, then check again: OK against the stored counts
         self.sources.write_text(self.sources.read_text().replace("verified-by-me", "curated"))
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update"]), 0)
+            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update", "--no-controls"]), 0)
         health = json.loads(hp.read_text())
         self.assertEqual(health["Curated One"]["hosts"], 2)
         self.assertEqual(health["Crawler One"]["kind"], "crawler")
@@ -850,19 +850,43 @@ class Registry(unittest.TestCase):
         (self.d / "crawl.txt").write_text(f"{self.ONION}\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(osc.main(["indices", "--indices", str(self.sources)]), 3)
+            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--no-controls"]), 3)
         self.assertIn("CHANGED: 7 -> 1 hosts (-86%)", out.getvalue())
         self.assertEqual(json.loads(hp.read_text())["Crawler One"]["hosts"], 7)
         # a source that fails keeps its last known entry even with --update
         (self.d / "crawl.txt").unlink()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update"]), 3)
+            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update", "--no-controls"]), 3)
         self.assertEqual(json.loads(hp.read_text())["Crawler One"]["hosts"], 7)
 
     def test_indices_subcommand_usage(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(osc.main(["indices"]), 2)
             self.assertEqual(osc.main(["indices", "--indices", str(self.d / "nope.txt")]), 2)
+
+    def test_indices_measures_the_circuit_first(self):
+        """A dead circuit makes every remote source look FAILED: the subcommand
+        says so, exits 3, and never records counts taken through it."""
+        original = osc.measure_controls
+        calls = []
+        def fake_controls(session, cfg, checkpoint):
+            calls.append(checkpoint)
+            return [{"name": "[control] x", "status": "OFFLINE", "status_detail": "OFFLINE", "checkpoint": checkpoint}]
+        osc.measure_controls = fake_controls
+        try:
+            self.sources.write_text("Curated One | cur.md | curated\n")
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = osc.main(["indices", "--indices", str(self.sources), "--update", "--delay", "0", "0"])
+            self.assertEqual((rc, calls), (3, ["start"]))
+            self.assertIn("CIRCUIT SUSPECT", err.getvalue())
+            self.assertFalse(osc.health_path(self.sources).exists())      # nothing written through a broken path
+            osc.measure_controls = lambda session, cfg, checkpoint: [{"name": "c", "status": "ONLINE", "status_detail": "ONLINE", "checkpoint": checkpoint}]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update", "--delay", "0", "0"]), 0)
+            self.assertTrue(osc.health_path(self.sources).exists())
+        finally:
+            osc.measure_controls = original
 
     def test_report_shows_kind_and_crawler_only(self):
         out = self.d / "r.html"
@@ -874,6 +898,244 @@ class Registry(unittest.TestCase):
         html = out.read_text()
         self.assertIn("ahmia <span class='dim'>crawler</span>", html)
         self.assertIn("(crawlers only)", html)
+
+
+class SearchSources(unittest.TestCase):
+    """kind: search — a source queried per target. Offline: fetch() is
+    replaced by scripted result pages."""
+
+    ENGINE = "http://" + "e" * 56 + ".onion/search?q={query}"
+    TARGET = "d" * 56 + ".onion"
+    OTHER = "f" * 56 + ".onion"
+
+    def setUp(self):
+        self._fetch = osc.fetch
+        self.d = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        osc.fetch = self._fetch
+
+    def page(self, *anchors: str, echo: bool = True) -> str:
+        body = "".join(anchors)
+        if echo:
+            body = f"<p>Results for {self.TARGET}</p>" + body + f'<a href="/search?q={self.TARGET}&page=2">next</a>'
+        return f"<html><body>{body}</body></html>"
+
+    def script(self, pages: dict, status: int = 200, error: Exception | None = None) -> list[str]:
+        """fetch() answers by the queried host; `pages` maps host -> html."""
+        calls: list[str] = []
+        def fake_fetch(uri, session, cfg):
+            calls.append(uri)
+            if error is not None:
+                raise error
+            host = osc.unquote(uri.split("q=", 1)[1])
+            return osc.Fetched(status, pages.get(host, "<html></html>"), uri, content_type="text/html"), False
+        osc.fetch = fake_fetch
+        return calls
+
+    def test_source_flags(self):
+        s = osc.Source("Engine", self.ENGINE, "search")
+        self.assertTrue(s.is_search and s.kind_matches_mechanism and s.is_remote)
+        self.assertFalse(osc.Source("Engine", self.ENGINE, "crawler").kind_matches_mechanism)
+        self.assertFalse(osc.Source("List", "https://x.example/list", "search").kind_matches_mechanism)
+        self.assertTrue(osc.Source("List", "https://x.example/list", "crawler").kind_matches_mechanism)
+        self.assertEqual(s.query_url("a b.onion"), "http://" + "e" * 56 + ".onion/search?q=a%20b.onion")
+
+    def test_results_only_count_anchors_not_echoes(self):
+        s = osc.Source("Engine", self.ENGINE, "search")
+        # echo in text + pagination link only: not a result
+        hits, seen = s.results_for(self.page(), self.TARGET)
+        self.assertEqual((hits, seen), ([], 0))
+        # a direct external link is a result
+        hits, seen = s.results_for(self.page(f'<a href="http://{self.TARGET}/">Duck <b>Duck</b> Go</a>'), self.TARGET)
+        self.assertEqual(len(hits), 1); self.assertEqual(hits[0]["name"], "Duck Duck Go"); self.assertEqual(hits[0]["kind"], "search")
+        self.assertEqual(seen, 1)
+        # a redirect through the engine counts when the address carries its scheme
+        hits, seen = s.results_for(self.page(f'<a href="/redirect?url=http%3A%2F%2F{self.TARGET}%2F">r</a>'
+                                             f'<a href="http://{self.OTHER}/">other</a>'), self.TARGET)
+        self.assertEqual(len(hits), 1); self.assertEqual(seen, 2)
+        # the engine's own host is never a result; at most 5 entries kept
+        many = "".join(f'<a href="http://{self.TARGET}/p{i}">p{i}</a>' for i in range(8))
+        hits, seen = s.results_for(self.page(f'<a href="http://{"e" * 56}.onion/about">about</a>' + many), self.TARGET)
+        self.assertEqual((len(hits), seen), (5, 1))
+
+    def test_query_counts_and_failures(self):
+        s = osc.Source("Engine", self.ENGINE, "search")
+        cfg = osc.Config(proxy="socks5h://127.0.0.1:1", timeout=1, delay=(0, 0))
+        self.script({self.TARGET: self.page(f'<a href="http://{self.TARGET}/">t</a>')})
+        hits, failure, seen = s.query(self.TARGET, None, cfg)
+        self.assertEqual((len(hits), failure, seen, s.queries, s.query_failures), (1, None, 1, 1, 0))
+        self.script({}, status=503)
+        hits, failure, _ = s.query(self.OTHER, None, cfg)
+        self.assertEqual((hits, failure, s.queries, s.query_failures), ([], "HTTP 503", 1, 1))
+        self.script({}, error=CE(SOCKS_0x04))
+        hits, failure, _ = s.query(self.OTHER, None, cfg)
+        self.assertEqual((hits, failure, s.query_failures), ([], "hidden_service_unreachable", 2))
+
+    def test_query_that_is_not_answered_with_a_results_page_is_a_failure(self):
+        """The Ahmia case: the engine answers a query it will not serve with a
+        302 to its home page. fetch() follows it; a 200 home page with two links
+        is not "nothing listed" — it is not an answer."""
+        s = osc.Source("Engine", self.ENGINE, "search")
+        cfg = osc.Config(proxy="x", timeout=1, delay=(0, 0))
+        home = f"<html><a href='http://{self.OTHER}/'>o</a><a href='/about'>a</a></html>"
+        osc.fetch = lambda uri, session, cfg: (osc.Fetched(200, home, "http://" + "e" * 56 + ".onion/", content_type="text/html"), False)
+        hits, failure, seen = s.query(self.TARGET, None, cfg)
+        self.assertEqual((hits, failure, seen, s.queries, s.query_failures), ([], "redirected away from the query (to /)", 0, 0, 1))
+        # a page with no links at all is not a results page either
+        osc.fetch = lambda uri, session, cfg: (osc.Fetched(200, "<html><p>blocked</p></html>", uri, content_type="text/html"), False)
+        hits, failure, _ = s.query(self.TARGET, None, cfg)
+        self.assertEqual((failure, s.query_failures), ("no links in the answer — not a results page", 2))
+        # a redirect that keeps the query (a mirror) is answered normally, and the mirror is the engine too
+        mirror = "http://" + "m" * 56 + f".onion/search?q={self.TARGET}"
+        page = f'<a href="http://{"m" * 56}.onion/about">about</a><a href="/go?u=http://{self.TARGET}/">t</a>'
+        osc.fetch = lambda uri, session, cfg: (osc.Fetched(200, page, mirror, content_type="text/html"), False)
+        hits, failure, seen = s.query(self.TARGET, None, cfg)
+        self.assertEqual((len(hits), failure, seen), (1, None, 1))
+
+    def test_results_shown_as_text_with_scheme_count_but_echoes_do_not(self):
+        """OnionLand's shape: the result link is an opaque redirect and the
+        address is written out next to it. The echo is the bare query."""
+        s = osc.Source("Engine", self.ENGINE, "search")
+        page = (f"<html><head><title>{self.TARGET} - Engine</title></head><body>"
+                f'<form><input type="search" name="q" value="{self.TARGET}"></form>'
+                f"<p>About 6 results found for {self.TARGET}</p>"
+                f'<ul><li><a href="/search?q=related&_q={self.TARGET}">related</a></li></ul>'
+                f'<div class="result"><div class="title"><a data-x="1" href="/r?s=b64opaque">\n  Duck &amp; Go\n </a></div>'
+                f'<div class="link">http://{self.TARGET}/</div></div>'
+                f'<div class="result"><div class="title"><a href="/r?s=other">Other</a></div><div class="link">http://{self.OTHER}/</div></div>'
+                "</body></html>")
+        hits, seen = s.results_for(page, self.TARGET)
+        self.assertEqual((len(hits), seen), (1, 2))
+        self.assertEqual((hits[0]["name"], hits[0]["where"]), ("Duck & Go", f"search results for {self.TARGET} (address shown as text)"))
+        # the same page without the written-out address: title, input, text and related links are echoes only
+        echo_only = page.replace(f"http://{self.TARGET}/", "")
+        self.assertEqual(s.results_for(echo_only, self.TARGET), ([], 1))
+
+    def test_results_for_edge_cases(self):
+        s = osc.Source("Engine", self.ENGINE, "search")
+        # protocol-relative and upper-case hrefs count like absolute ones
+        hits, seen = s.results_for(f'<a href="//{self.TARGET}/x">a</a><a href="/r?u=HTTP://{self.OTHER.upper()}/">b</a>', self.TARGET)
+        self.assertEqual((len(hits), seen), (1, 2))
+        # a clearnet navigation link is a hit for a clearnet target but never an "onion host in results"
+        hits, seen = s.results_for('<a href="https://twitter.com/x">tw</a>', "twitter.com")
+        self.assertEqual((len(hits), seen), (1, 0))
+        # a local path with {query} is a list, not a search source
+        local = osc.Source("L", "/tmp/{query}/list.md", "search")
+        self.assertFalse(local.is_search); self.assertFalse(local.kind_matches_mechanism)
+
+    def test_lookup_with_a_search_source(self):
+        (self.d / "list.md").write_text(f"[Other](http://{self.OTHER}/)\n")
+        srcs = [osc.Source("Curated", str(self.d / "list.md"), "curated"), osc.Source("Engine", self.ENGINE, "search")]
+        cfg = osc.Config(proxy="x", timeout=1, delay=(0, 0))
+        calls = self.script({self.TARGET: self.page(f'<a href="http://{self.TARGET}/">t</a>')})
+        ix = osc.Indices(srcs); ix.load(object(), cfg)
+        self.assertEqual([s.error for s in srcs], [None, None])
+        r = ix.lookup(f"http://{self.TARGET}/")
+        self.assertEqual((r["verdict"], r["listed_kinds"], r["crawler_only"], r["sources_failed"]), ("listed", ["search"], True, []))
+        self.assertEqual(calls, [self.ENGINE.replace("{query}", self.TARGET)])
+        r = ix.lookup(f"http://{self.OTHER}/")
+        self.assertEqual((r["verdict"], r["listed_kinds"], r["crawler_only"]), ("listed", ["curated"], False))
+        # a failed query marks this record's sources_failed, not the run
+        self.script({}, status=500)
+        r = ix.lookup("http://" + "g" * 56 + ".onion/")
+        self.assertEqual((r["verdict"], r["sources_failed"]), ("unlisted", ["Engine"]))
+        ix.close_search_sources()
+        self.assertIsNone(srcs[1].error)                          # it did answer earlier
+        # an engine that never answered is a failed source
+        dead = osc.Source("Dead", self.ENGINE, "search"); dead.query_failures = 2
+        ix2 = osc.Indices([dead]); ix2.load(object(), cfg); ix2.close_search_sources()
+        self.assertEqual(dead.error, "all 2 queries failed")
+
+    def test_lookup_gives_up_on_an_engine_that_never_answers(self):
+        cfg = osc.Config(proxy="x", timeout=1, delay=(0, 0))
+        dead = osc.Source("Dead", self.ENGINE, "search")
+        calls = self.script({}, status=503)
+        ix = osc.Indices([dead]); ix.load(object(), cfg)
+        for i in range(5):
+            r = ix.lookup("http://" + chr(ord("a") + i) * 56 + ".onion/")
+            self.assertEqual(r["sources_failed"], ["Dead"])
+        self.assertEqual(len(calls), osc.Indices.GIVE_UP_AFTER)     # the 4th and 5th targets cost no request
+        self.assertEqual(dead.error, f"gave up after {osc.Indices.GIVE_UP_AFTER} failed queries with no answer")
+
+    def test_search_source_without_session_is_failed(self):
+        s = osc.Source("Engine", self.ENGINE, "search")
+        ix = osc.Indices([s]); ix.load(None, None)
+        self.assertEqual(s.error, "no session")
+
+    def test_main_rejects_kind_mismatch(self):
+        f = self.d / "s.txt"; f.write_text(f"Engine | {self.ENGINE} | crawler\n")
+        t = self.d / "t.txt"; t.write_text(f"A | http://{self.TARGET}/\n")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main([str(t), "--indices", str(f), "--indices-only", "--out-dir", str(self.d / "o")]), 2)
+
+    def test_indices_check_probes_search_sources(self):
+        f = self.d / "s.txt"; f.write_text(f"Engine | {self.ENGINE} | search\nWrong | {self.ENGINE} | crawler\n")
+        n = len(osc.PROBE_HOSTS)
+        probe_pages = {h: self.page(f'<a href="http://{h}/">c</a>') for h in osc.PROBE_HOSTS}
+        calls = self.script(probe_pages)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = osc.main(["indices", "--indices", str(f), "--update", "--delay", "0", "0", "--no-controls"])
+        self.assertEqual(rc, 3)                                    # "Wrong" is a KIND? line
+        text = out.getvalue()
+        self.assertIn(f"NEW: {n}/{n} probes found", text)
+        self.assertIn("KIND?: URL has {query} but kind is not 'search'", text)
+        self.assertEqual(len(calls), n, "the mis-kinded source is never fetched")
+        health = json.loads(osc.health_path(f).read_text())
+        self.assertEqual((health["Engine"]["probes_found"], health["Engine"]["probes_total"]), (n, n))
+        self.assertNotIn("hosts", health["Engine"]); self.assertNotIn("Wrong", health)
+        # one probe comes back and the other is a genuine "0 results": coverage, not mechanism — still OK
+        first = osc.PROBE_HOSTS[0]
+        self.script({first: probe_pages[first], **{h: self.page() for h in osc.PROBE_HOSTS[1:]}})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main(["indices", "--indices", str(f), "--delay", "0", "0", "--no-controls"]), 3)  # 3: "Wrong" only
+        self.assertIn(f"OK: 1/{n} probes found", out.getvalue())
+        # one probe comes back and the other FAILS (HTTP 503): the mechanism is flaky — PARTIAL, exit 3, health untouched
+        def flaky(uri, session, cfg):
+            host = osc.unquote(uri.split("q=", 1)[1])
+            if host == first:
+                return osc.Fetched(200, probe_pages[first], uri, content_type="text/html"), False
+            return osc.Fetched(503, "", uri, content_type="text/html"), False
+        osc.fetch = flaky
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main(["indices", "--indices", str(f), "--update", "--delay", "0", "0", "--no-controls"]), 3)
+        self.assertIn(f"PARTIAL: 1/{n} probes found", out.getvalue()); self.assertIn("1 probe(s) failed: HTTP 503", out.getvalue())
+        self.assertEqual(json.loads(osc.health_path(f).read_text())["Engine"]["probes_found"], n)
+        # pages without the probes: FAILED with the reason; every probe erroring: FAILED with the error
+        self.script({h: self.page() for h in osc.PROBE_HOSTS})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            osc.main(["indices", "--indices", str(f), "--delay", "0", "0", "--no-controls"])
+        self.assertIn("FAILED: none of", out.getvalue())
+        self.script({}, error=CE(SOCKS_0x04))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            osc.main(["indices", "--indices", str(f), "--delay", "0", "0", "--no-controls"])
+        self.assertIn("FAILED: every probe failed: hidden_service_unreachable", out.getvalue())
+
+    def test_probe_skips_the_engine_itself(self):
+        engine_host = osc.PROBE_HOSTS[0]
+        s = osc.Source("Self", f"http://{engine_host}/search?q={{query}}", "search")
+        calls = self.script({h: self.page(f'<a href="http://{h}/">c</a>') for h in osc.PROBE_HOSTS})
+        pr = osc.probe_search_source(s, None, osc.Config(proxy="x", timeout=1, delay=(0, 0)))
+        self.assertEqual((pr["found"], pr["total"]), (len(osc.PROBE_HOSTS) - 1, len(osc.PROBE_HOSTS) - 1))
+        self.assertTrue(all(engine_host not in c.split("q=")[1] for c in calls))
+        self.assertEqual(osc.source_status(s, None, pr)[0], "NEW")
+
+    def test_all_queries_failed_engine_makes_the_run_exit_3(self):
+        f = self.d / "s.txt"; f.write_text(f"Engine | {self.ENGINE} | search\n")
+        t = self.d / "t.txt"; t.write_text(f"A | http://{self.TARGET}/\nB | http://{self.OTHER}/\n")
+        self.script({}, status=503)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = osc.main([str(t), "--indices", str(f), "--indices-only", "--out-dir", str(self.d / "o"), "--delay", "0", "0"])
+        self.assertEqual(rc, 3)
+        self.assertIn("source Engine: FAILED (all 2 queries failed)", err.getvalue())
+        recs = json.loads(next((self.d / "o").glob("t-indices-*.json")).read_text())
+        self.assertTrue(all(r["indices"]["sources_failed"] == ["Engine"] for r in recs))
 
 
 if __name__ == "__main__":

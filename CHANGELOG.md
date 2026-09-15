@@ -7,6 +7,59 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-15
+
+### Added
+- **`kind: search` — sources queried per target.** A source whose URL
+  contains `{query}` is asked about every target's host (URL-encoded) and
+  its result page is read: only links count — the query is echoed in the
+  text and in pagination links, and an echo is not a result; a link to
+  another site counts by its host, a link back into the engine only when
+  the address appears in it with its scheme. One request per target per
+  engine, with the usual pause. A failed query puts the engine in that
+  record's `sources_failed`; an engine that has answered nothing after three
+  failed queries is not asked again in the run, and one that answered no
+  query at all is a failed source (exit `3`). An answer that is not a results
+  page — a redirect away from the query, a page with no links — is a failed
+  query, not "nothing listed". `{query}` and kind `search` must go together
+  (and only a URL can be a search source) — a mismatch is a usage error in a
+  run and `KIND?` in `indices`, and such a source is never fetched.
+- `indices` probes a search engine instead of loading it: it asks for the
+  onion control targets other than the engine itself and passes when at
+  least one comes back and no probe fails — the probe tests the mechanism,
+  not the engine's coverage (`PARTIAL` when something came back but a probe
+  failed); the health entry of a search source carries `probes_found`,
+  `probes_total` and `results_hosts` instead of `hosts`. `--delay` on the
+  subcommand, and list sources are now loaded one after another with that
+  pause.
+- What counts as a result: a link to the address, or the address written
+  out **with its scheme** in the visible text next to an opaque result link
+  (OnionLand's shape); the echo of the query never carries a scheme.
+- **The registry gains its first search engine, OnionLand Search**, probed
+  through Tor; `SOURCES.md` records why Ahmia's search (per-session form
+  token), Amnesia (no address queries), Tordex (`HTTP 400`) and three
+  unreachable engines are not there.
+- `indices` measures the circuit controls before the sources (`--no-controls`
+  to skip). A failed control says so, exits `3`, and nothing is written to
+  the health file — found the hard way: with the Tor daemon's onion
+  circuits down, every onion engine looked `FAILED: timeout`.
+- `crawler_only` now means listed only by robots: `crawler` **or** `search`.
+- The registry ships no search engine yet; `SOURCES.md` says which are
+  candidates and why each must be probed through Tor first.
+  `examples/indices.txt` shows the shape with Ahmia's onion.
+- 13 offline tests (flags, result parsing against echoes, pagination,
+  protocol-relative and mixed-case links, mirrors, clearnet navigation;
+  query counters; answers that are not results pages; lookup with a search
+  source; giving up on a dead engine; missing session; kind mismatch; the
+  probe, partial and failed; the probe skipping the engine itself; an
+  all-failed engine through the run; the controls); 85 in all. The result
+  parser was also run against a saved, real results page (202 distinct hosts
+  behind redirect links; zero false hits for the echoed query) and against
+  OnionLand's (4 results behind opaque redirect links, the address written
+  out as text). An adversarial review of the change (three lenses, three
+  refuters per finding) produced 21 findings; all were addressed in this
+  release.
+
 ## [0.5.0] — 2026-09-15
 
 ### Added
@@ -219,7 +272,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.2.0...v0.3.0
