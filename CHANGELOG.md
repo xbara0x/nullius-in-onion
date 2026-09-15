@@ -7,7 +7,19 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
-## [0.4.0] — 2026-09-13
+## [0.4.0] — 2026-09-15
+
+### Changed
+- **Renamed: onion-status-check → Nullius in Onion.** The module is
+  `nullius.py`, the command is `nullius`, the distribution is
+  `nullius-in-onion`, the repository is `xbara0x/nullius-in-onion` (the old
+  URL redirects). *Nullius in verba* — "on the word of no one" — is the Royal
+  Society's motto, and it is what this tool does at every layer: it does not
+  take the index's word (curated is not crawler), the server's word (a 403
+  is alive, a challenge page is alive, a placeholder is not a title), or its
+  own (controls, exit `3`, `suspect`). Tags `v0.1.0`–`v0.3.0` keep the old
+  name inside; nothing else changes — the JSON layout, options and exit
+  codes are the same as before the rename.
 
 ### Added
 - **Batch options for long lists.** `--journal FILE` appends every record
@@ -78,8 +90,8 @@ bump may change the JSON layout and says so under **Changed**.
 
 ### Added
 - `pyproject.toml`: installable with `pip install .` or `pipx install`, which
-  puts an `onion-status-check` command on the `PATH`; `--version`. Running
-  the file directly keeps working.
+  puts an `onion-status-check` command on the `PATH` (now `nullius`, see
+  0.4.0); `--version`. Running the file directly keeps working.
 - CI: the offline unit tests run on every push and pull request, on Python
   3.10, 3.12 and 3.14; a second job installs the package and runs the command.
 - **Index cross-check.** `--indices FILE` names sources, one per line
@@ -167,8 +179,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/onion-status-check/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/xbara0x/onion-status-check/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/xbara0x/onion-status-check/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/xbara0x/onion-status-check/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/xbara0x/onion-status-check/releases/tag/v0.1.0
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/xbara0x/nullius-in-onion/releases/tag/v0.1.0

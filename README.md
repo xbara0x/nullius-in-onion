@@ -1,8 +1,11 @@
-# onion-status-check
+# Nullius in Onion
 
-[![tests](https://github.com/xbara0x/onion-status-check/actions/workflows/tests.yml/badge.svg)](https://github.com/xbara0x/onion-status-check/actions/workflows/tests.yml)
+[![tests](https://github.com/xbara0x/nullius-in-onion/actions/workflows/tests.yml/badge.svg)](https://github.com/xbara0x/nullius-in-onion/actions/workflows/tests.yml)
 
-Answers three questions about a list of `.onion` (or clearnet) addresses, honestly:
+**Take nobody's word for it — not the index's, not the server's, not this
+tool's.** *Nullius in verba*, "on the word of no one", is the Royal Society's
+motto; this is that attitude applied to a list of `.onion` (or clearnet)
+addresses. It answers three questions, honestly:
 
 1. **Is it up?** — one plain GET through Tor, status code and page title, nothing else.
 2. **Who already lists it?** — cross-checked against any indices you point it at
@@ -18,7 +21,7 @@ cannot be trusted.
 and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="onion-status-check running on the example list: three index sources load, five targets are measured, four are listed by dark.fail / tor.taxi / ahmia, controls 3/3" width="880">
+  <img src="docs/demo.gif" alt="nullius running on the example list: three index sources load, five targets are measured, four are listed by dark.fail / tor.taxi / ahmia, controls 3/3" width="880">
 </p>
 
 <sub>A real run on <code>examples/targets.txt</code> (public services only), ~1 min wall-clock compressed to 20 s. Also as <a href="docs/demo.svg">SVG</a>.</sub>
@@ -33,11 +36,11 @@ Arch: install `tor`, then `systemctl enable --now tor`), Python 3.10+, and
 
 ```bash
 pip install -r requirements.txt
-python3 onion_status_check.py examples/targets.txt
+python3 nullius.py examples/targets.txt
 ```
 
-Or install it as a command — `pipx install git+https://github.com/xbara0x/onion-status-check`
-(or `pip install .` from a clone) — and run `onion-status-check examples/targets.txt`.
+Or install it as a command — `pipx install git+https://github.com/xbara0x/nullius-in-onion`
+(or `pip install .` from a clone) — and run `nullius examples/targets.txt`.
 Both forms are the same program.
 
 The example list has public services only. You should see every target
@@ -191,10 +194,10 @@ flowchart LR
 
 ```bash
 # triage a list before spending a second of Tor time on the targets
-python3 onion_status_check.py new-links.txt --indices examples/indices.txt --indices-only
+python3 nullius.py new-links.txt --indices examples/indices.txt --indices-only
 
 # measure and cross-check in one run
-python3 onion_status_check.py new-links.txt --indices examples/indices.txt --catalog ~/src/deepdarkCTI
+python3 nullius.py new-links.txt --indices examples/indices.txt --catalog ~/src/deepdarkCTI
 ```
 
 Each record gains an `indices` block with a verdict and the evidence:
@@ -249,7 +252,7 @@ what moved. Two result files of the same list, and the tool reports the
 transitions:
 
 ```bash
-python3 onion_status_check.py diff results/my-list-20260913-1730.json results/my-list-20260920-0012.json
+python3 nullius.py diff results/my-list-20260913-1730.json results/my-list-20260920-0012.json
 ```
 
 ```
@@ -301,7 +304,7 @@ compares the result with the most recent earlier run of the *same list* in
 status stays the run's; the diff's verdict is in the file.
 
 ```bash
-python3 onion_status_check.py my-list.txt --diff-previous
+python3 nullius.py my-list.txt --diff-previous
 ```
 
 ---
@@ -315,7 +318,7 @@ dead path, and the list contains pages you do not want to read — not even
 their title. The batch options are one answer each.
 
 ```bash
-python3 onion_status_check.py big-list.txt --journal results/big-list.jsonl \
+python3 nullius.py big-list.txt --journal results/big-list.jsonl \
     --controls-every 250 --stop-terms my-terms.txt --exclusions do-not-fetch.txt
 ```
 

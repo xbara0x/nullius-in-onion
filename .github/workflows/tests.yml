@@ -33,5 +33,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install .
-      - run: onion-status-check --version
-      - run: onion-status-check --help
+      - run: nullius --version
+      - run: nullius --help

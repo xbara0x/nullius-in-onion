@@ -21,7 +21,7 @@ import requests
 from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("osc", ROOT / "onion_status_check.py")
+_spec = importlib.util.spec_from_file_location("osc", ROOT / "nullius.py")
 osc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(osc)
 

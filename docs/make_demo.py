@@ -3,7 +3,7 @@
 
 Used to produce docs/demo.svg and docs/demo.gif from a real run:
 
-    python3 onion_status_check.py examples/targets.txt --indices examples/indices.txt 2>&1 \
+    python3 nullius.py examples/targets.txt --indices examples/indices.txt 2>&1 \
         | sed "s#$PWD/results/#results/#g" > docs/transcript.txt
     python3 docs/make_demo.py docs/transcript.txt docs/demo
 
@@ -19,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-PROMPT = "$ python3 onion_status_check.py examples/targets.txt --indices examples/indices.txt"
+PROMPT = "$ python3 nullius.py examples/targets.txt --indices examples/indices.txt"
 COLS, FONT_PX, LINE_H, PAD = 100, 14, 22, 18
 BG, FG, DIM, GREEN, YELLOW, BLUE, RED = "#0d1117", "#d0d7de", "#8b949e", "#3fb950", "#d29922", "#58a6ff", "#f85149"
 
@@ -28,7 +28,7 @@ def color_for(line: str) -> str:
     s = line.strip()
     if s.startswith("$ "):
         return FG
-    if s.startswith("Done:") or s.startswith("Controls: 3/3") or s.startswith("Indices:"):
+    if s.startswith("Done:") or s.startswith("Indices:") or re.match(r"Controls( \([^)]*\))?: (\d+)/\2 ", s):
         return GREEN
     if s.startswith("caveat:") or "WARNING" in s or "FAILED" in s:
         return YELLOW

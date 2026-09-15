@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-onion-status-check — is it up, who already lists it, and what changed?
+Nullius in Onion — take nobody's word for it: not the index's, not the
+server's, not this tool's. Is it up, who already lists it, what changed?
 
 For each target: ONE plain HTTP GET through the local Tor SOCKS proxy, then
 the status code and the page <title>. No JavaScript, no images, no forms, no
@@ -43,8 +44,8 @@ Batch
     file so no later run fetches it again.
 
 Usage
-    python3 onion_status_check.py targets.txt [--indices sources.txt] [--catalog PATH]
-                                              [--indices-only] [--out-dir DIR] ...
+    python3 nullius.py targets.txt [--indices sources.txt] [--catalog PATH]
+                                   [--indices-only] [--out-dir DIR] ...
     targets.txt: one per line, "Name | URL" or just "URL"; '#' comments.
     sources.txt: one per line, "Name | URL-or-path"; '#' comments.
 
@@ -726,8 +727,8 @@ def write_html_report(results: list[dict], out_path: Path,
            ".src{background:#ddf4ff;border-radius:4px;padding:0 .3em}")
     lines = ["<!doctype html><html><head><meta charset='utf-8'>"
              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-             f"<title>onion-status-check report</title><style>{css}</style></head><body>",
-             f"<p class='dim'>onion-status-check — {len(results)} target(s)</p>"]
+             f"<title>Nullius in Onion — report</title><style>{css}</style></head><body>",
+             f"<p class='dim'>Nullius in Onion — {len(results)} target(s)</p>"]
 
     def cat_note(r: dict) -> str:
         ix = r.get("indices")

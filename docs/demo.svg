@@ -2,7 +2,7 @@
 <rect width="100%" height="100%" rx="8" fill="#0d1117"/>
 <circle cx="22" cy="18" r="5" fill="#ff5f56"/><circle cx="40" cy="18" r="5" fill="#ffbd2e"/><circle cx="58" cy="18" r="5" fill="#27c93f"/>
 <style>.l{opacity:0;animation:show .01s linear forwards}@keyframes show{to{opacity:1}}.c{animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}</style>
-<text class="l" x="18" y="42" fill="#d0d7de" style="animation-delay:0.00s" xml:space="preserve">$ python3 onion_status_check.py examples/targets.txt --indices examples/indices.txt</text>
+<text class="l" x="18" y="42" fill="#d0d7de" style="animation-delay:0.00s" xml:space="preserve">$ python3 nullius.py examples/targets.txt --indices examples/indices.txt</text>
 <text class="l" x="18" y="64" fill="#8b949e" style="animation-delay:1.00s" xml:space="preserve">Loading 3 index source(s) (3 remote, via socks5h://127.0.0.1:9050)...</text>
 <text class="l" x="18" y="86" fill="#d0d7de" style="animation-delay:1.45s" xml:space="preserve">  dark.fail: 36 hosts, 6 named entries, 1 file(s)</text>
 <text class="l" x="18" y="108" fill="#d0d7de" style="animation-delay:1.90s" xml:space="preserve">  tor.taxi: 56 hosts, 96 named entries, 1 file(s)</text>

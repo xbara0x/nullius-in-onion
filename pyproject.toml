@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "onion-status-check"
+name = "nullius-in-onion"
 dynamic = ["version"]
-description = "Honest liveness checks for .onion URLs over Tor — any response means ONLINE; circuit controls tell a dead batch from a broken circuit."
+description = "Take nobody's word for it — not the index's, not the server's, not this tool's. Is a .onion up, who already lists it, what changed since last time."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -28,15 +28,15 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/xbara0x/onion-status-check"
-Changelog = "https://github.com/xbara0x/onion-status-check/blob/main/CHANGELOG.md"
-Issues = "https://github.com/xbara0x/onion-status-check/issues"
+Homepage = "https://github.com/xbara0x/nullius-in-onion"
+Changelog = "https://github.com/xbara0x/nullius-in-onion/blob/main/CHANGELOG.md"
+Issues = "https://github.com/xbara0x/nullius-in-onion/issues"
 
 [project.scripts]
-onion-status-check = "onion_status_check:main"
+nullius = "nullius:main"
 
 [tool.setuptools]
-py-modules = ["onion_status_check"]
+py-modules = ["nullius"]
 
 [tool.setuptools.dynamic]
-version = { attr = "onion_status_check.__version__" }
+version = { attr = "nullius.__version__" }
