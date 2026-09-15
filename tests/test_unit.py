@@ -754,5 +754,127 @@ class Batch(unittest.TestCase):
         self.assertEqual(self.run_main(f"A | {self.ONION}\n", "--controls-every", "-1"), 2)
 
 
+class Registry(unittest.TestCase):
+    """Kinds, the registry file, and the `indices` health check — offline,
+    with local files standing in for remote sources."""
+
+    ONION = "a" * 56 + ".onion"
+    ONION2 = "b" * 56 + ".onion"
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        (self.d / "cur.md").write_text(f"[Alpha](http://{self.ONION}/)\n[Beta](http://{self.ONION2}/)\n")
+        # base32 only: digits 2-7 are valid in a v3 address, 0/1/8/9 are not
+        (self.d / "crawl.txt").write_text(f"{self.ONION}\n" + "\n".join("c" * 55 + str(i) + ".onion" for i in range(2, 8)))
+        self.sources = self.d / "sources.txt"
+        self.sources.write_text("# registry-shaped file\n"
+                                "Curated One | cur.md   | curated\n"      # relative to the file
+                                "Crawler One | crawl.txt | crawler\n"
+                                "Odd Kind    | cur.md | verified-by-me\n"
+                                "Bare | crawl.txt\n")
+
+    def test_read_sources_kinds_and_relative_paths(self):
+        srcs = osc.read_sources(self.sources)
+        self.assertEqual([(s.name, s.kind) for s in srcs],
+                         [("Curated One", "curated"), ("Crawler One", "crawler"), ("Odd Kind", "verified-by-me"), ("Bare", "unspecified")])
+        self.assertEqual([s.kind_known for s in srcs], [True, True, False, True])
+        self.assertTrue(all(Path(s.origin).is_absolute() for s in srcs))       # resolved against the file's directory
+        self.assertEqual(Path(srcs[0].origin), self.d / "cur.md")
+
+    def test_lookup_reports_kinds_and_crawler_only(self):
+        srcs = osc.read_sources(self.sources)[:2]
+        ix = osc.Indices(srcs); ix.load(None, None)
+        both = ix.lookup(f"http://{self.ONION}/")
+        self.assertEqual(both["verdict"], "listed")
+        self.assertEqual(both["listed_kinds"], ["crawler", "curated"])
+        self.assertFalse(both["crawler_only"])
+        self.assertEqual({e["kind"] for e in both["listed_in"]}, {"curated", "crawler"})
+        only = ix.lookup("http://" + "c" * 55 + "3.onion/")
+        self.assertEqual((only["verdict"], only["listed_kinds"], only["crawler_only"]), ("listed", ["crawler"], True))
+        none = ix.lookup(f"http://{self.ONION2}/")
+        self.assertEqual((none["verdict"], none["listed_kinds"], none["crawler_only"]), ("listed", ["curated"], False))
+        self.assertEqual(ix.lookup("http://nobody.example/")["listed_kinds"], [])
+
+    def test_catalog_shortcut_is_kind_self(self):
+        t = self.d / "t.txt"; t.write_text(f"A | http://{self.ONION}/\n")
+        out = self.d / "out"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main([str(t), "--catalog", str(self.d / "cur.md"), "--indices-only", "--out-dir", str(out)]), 0)
+        rec = json.loads(next(out.glob("t-indices-*.json")).read_text())[0]
+        self.assertEqual(rec["indices"]["listed_kinds"], ["self"])
+
+    def test_registry_path_finds_the_shipped_file(self):
+        p = osc.registry_path()
+        self.assertIsNotNone(p)
+        self.assertEqual(p.name, "sources.txt")
+        srcs = osc.read_sources(p)
+        self.assertGreaterEqual(len(srcs), 5)
+        self.assertTrue(all(s.kind_known and s.kind != "unspecified" for s in srcs), "every registry entry carries a known kind")
+        self.assertTrue(all(s.is_remote for s in srcs), "the shipped registry is remote sources only")
+        health = json.loads(osc.health_path(p).read_text())
+        self.assertEqual(set(health), {s.name for s in srcs}, "sources-health.json covers exactly the registry")
+
+    def test_source_status_rules(self):
+        st = osc.source_status
+        src = osc.Source("x", "y", "curated"); src.hosts = {str(i): [] for i in range(100)}
+        self.assertEqual(st(src, None)[0], "NEW")
+        self.assertEqual(st(src, {"hosts": 100, "checked": "2026-09-01"})[0], "OK")
+        self.assertEqual(st(src, {"hosts": 190})[0], "OK")            # -47%: within half
+        self.assertEqual(st(src, {"hosts": 800})[0], "CHANGED")       # dropped to 12.5%
+        self.assertEqual(st(src, {"hosts": 40})[0], "CHANGED")        # grew 2.5x
+        src.hosts = {}
+        self.assertEqual(st(src, None)[0], "EMPTY")
+        src.error = "HTTP 404"
+        self.assertEqual(st(src, None), ("FAILED", "HTTP 404"))
+        odd = osc.Source("x", "y", "whatever"); odd.hosts = {"h": []}
+        self.assertEqual(st(odd, None)[0], "KIND?")
+
+    def test_indices_subcommand_reports_and_updates_health(self):
+        hp = osc.health_path(self.sources)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = osc.main(["indices", "--indices", str(self.sources)])
+        self.assertEqual(rc, 3)                                   # the unknown kind
+        text = out.getvalue()
+        self.assertIn("Curated One", text); self.assertIn("NEW: 2 hosts", text)
+        self.assertIn("KIND?: unknown kind 'verified-by-me'", text)
+        self.assertFalse(hp.exists())                             # no --update, no file
+        # fix the kind, update, then check again: OK against the stored counts
+        self.sources.write_text(self.sources.read_text().replace("verified-by-me", "curated"))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update"]), 0)
+        health = json.loads(hp.read_text())
+        self.assertEqual(health["Curated One"]["hosts"], 2)
+        self.assertEqual(health["Crawler One"]["kind"], "crawler")
+        # the crawler source shrinks to one line: CHANGED, exit 3, health untouched without --update
+        (self.d / "crawl.txt").write_text(f"{self.ONION}\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main(["indices", "--indices", str(self.sources)]), 3)
+        self.assertIn("CHANGED: 7 -> 1 hosts (-86%)", out.getvalue())
+        self.assertEqual(json.loads(hp.read_text())["Crawler One"]["hosts"], 7)
+        # a source that fails keeps its last known entry even with --update
+        (self.d / "crawl.txt").unlink()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main(["indices", "--indices", str(self.sources), "--update"]), 3)
+        self.assertEqual(json.loads(hp.read_text())["Crawler One"]["hosts"], 7)
+
+    def test_indices_subcommand_usage(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(osc.main(["indices"]), 2)
+            self.assertEqual(osc.main(["indices", "--indices", str(self.d / "nope.txt")]), 2)
+
+    def test_report_shows_kind_and_crawler_only(self):
+        out = self.d / "r.html"
+        rec = {"name": "A", "uri": f"http://{self.ONION}/", "status": "ONLINE", "status_detail": "ONLINE", "title": "T",
+               "title_source": "html_title", "needs_js_rendering": False,
+               "indices": {"verdict": "listed", "listed_kinds": ["crawler"], "crawler_only": True, "name_matches": [],
+                           "sources_failed": [], "listed_in": [{"source": "ahmia", "kind": "crawler", "name": "", "host": self.ONION, "where": "x", "line": 1}]}}
+        osc.write_html_report([rec], out, None)
+        html = out.read_text()
+        self.assertIn("ahmia <span class='dim'>crawler</span>", html)
+        self.assertIn("(crawlers only)", html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

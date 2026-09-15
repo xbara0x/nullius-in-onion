@@ -1,0 +1,106 @@
+{
+  "Ahmia": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 9025,
+    "kind": "crawler",
+    "names": 0,
+    "origin": "https://ahmia.fi/onions/"
+  },
+  "OGransomwatch": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 404,
+    "kind": "tracker",
+    "names": 807,
+    "origin": "https://raw.githubusercontent.com/GavinEke/OGransomwatch/main/groups.json"
+  },
+  "SecureDrop directory": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 24,
+    "kind": "institutional",
+    "names": 24,
+    "origin": "https://securedrop.org/api/v1/directory/"
+  },
+  "Tor Project onion services": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 146,
+    "kind": "institutional",
+    "names": 195,
+    "origin": "https://onion.torproject.org/"
+  },
+  "Wikipedia: Tor onion services": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 106,
+    "kind": "community",
+    "names": 557,
+    "origin": "https://en.wikipedia.org/wiki/List_of_Tor_onion_services"
+  },
+  "dark.fail": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 36,
+    "kind": "curated",
+    "names": 6,
+    "origin": "https://dark.fail/"
+  },
+  "deepdarkCTI forum": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 342,
+    "kind": "community",
+    "names": 339,
+    "origin": "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/forum.md"
+  },
+  "deepdarkCTI markets": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 164,
+    "kind": "community",
+    "names": 164,
+    "origin": "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/markets.md"
+  },
+  "deepdarkCTI others": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 53,
+    "kind": "community",
+    "names": 55,
+    "origin": "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/others.md"
+  },
+  "deepdarkCTI ransomware": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 665,
+    "kind": "community",
+    "names": 685,
+    "origin": "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/ransomware_gang.md"
+  },
+  "deepdarkCTI search engines": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 61,
+    "kind": "community",
+    "names": 62,
+    "origin": "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/search_engines.md"
+  },
+  "real-world-onion-sites": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 156,
+    "kind": "community",
+    "names": 641,
+    "origin": "https://raw.githubusercontent.com/alecmuffett/real-world-onion-sites/master/README.md"
+  },
+  "tor.taxi": {
+    "checked": "2026-09-15",
+    "files": 1,
+    "hosts": 56,
+    "kind": "curated",
+    "names": 96,
+    "origin": "https://tor.taxi/"
+  }
+}

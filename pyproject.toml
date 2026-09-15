@@ -37,6 +37,9 @@ nullius = "nullius:main"
 
 [tool.setuptools]
 py-modules = ["nullius"]
+# The registry travels with an installed copy too: nullius looks for it under
+# sys.prefix/share/nullius when there is no indices/ next to the module.
+data-files = { "share/nullius" = ["indices/sources.txt", "indices/sources-health.json"] }
 
 [tool.setuptools.dynamic]
 version = { attr = "nullius.__version__" }

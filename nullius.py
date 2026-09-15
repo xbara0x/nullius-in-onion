@@ -6,10 +6,12 @@ server's, not this tool's. Is it up, who already lists it, what changed?
 For each target: ONE plain HTTP GET through the local Tor SOCKS proxy, then
 the status code and the page <title>. No JavaScript, no images, no forms, no
 login, no crawling. Optionally, every target is also looked up in a set of
-index sources (curated lists, crawler lists, local catalogs) to say who
-already lists that address or that name. `diff` compares two result files
-of the same list and reports what moved, with both runs' circuit controls
-in view.
+index sources — the registry shipped in indices/sources.txt (each with a
+kind: curated, crawler, institutional, tracker, community) and/or your own
+— to say who already lists that address or that name, and how much that is
+worth. `diff` compares two result files of the same list and reports what
+moved, with both runs' circuit controls in view. `indices` checks the
+sources themselves.
 
 The full explanation — why a naive checker lies, what every label and error
 class means, how index matching works, exit codes — lives in README.md. What
@@ -78,7 +80,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.4.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.5.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -268,6 +270,19 @@ HTML_LINK_RE = re.compile(r"<a\s[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", r
 TAG_RE = re.compile(r"<[^>]+>")
 
 
+# What "listed" means depends on who did the listing. The kind is the third
+# column of a sources file; a source without one is "unspecified".
+SOURCE_KINDS = {
+    "curated": "a person verified the identity behind the address (dark.fail, tor.taxi)",
+    "crawler": "a robot reached the address once; nothing about identity (Ahmia)",
+    "institutional": "the operator itself publishes the address (onion.torproject.org, SecureDrop)",
+    "tracker": "a thematic tracker maintains it (ransomware leak sites)",
+    "community": "a list curated by pull request (deepdarkCTI, real-world-onion-sites)",
+    "self": "your own catalog or bookmarks (--catalog)",
+}
+UNSPECIFIED_KIND = "unspecified"
+
+
 class Source:
     """One index of onion addresses: a local file/tree or a remote page.
 
@@ -279,9 +294,10 @@ class Source:
     only remembers who lists what.
     """
 
-    def __init__(self, name: str, origin: str):
+    def __init__(self, name: str, origin: str, kind: str = UNSPECIFIED_KIND):
         self.name = name
         self.origin = origin
+        self.kind = kind
         self.hosts: dict[str, list[dict]] = {}
         self.named: list[tuple[list[str], frozenset[str], dict]] = []
         self.files = 0
@@ -294,6 +310,10 @@ class Source:
     @property
     def is_remote(self) -> bool:
         return self.origin.startswith(("http://", "https://"))
+
+    @property
+    def kind_known(self) -> bool:
+        return self.kind in SOURCE_KINDS or self.kind == UNSPECIFIED_KIND
 
     # -- loading -----------------------------------------------------------
     def load_local(self) -> None:
@@ -348,7 +368,7 @@ class Source:
         if not host or host in seen:
             return
         seen.add(host)
-        entry = {"source": self.name, "name": name, "host": host, "where": where, "line": lineno}
+        entry = {"source": self.name, "kind": self.kind, "name": name, "host": host, "where": where, "line": lineno}
         self.hosts.setdefault(host, []).append(entry)
         keys, words = name_keys(name), name_words(name)
         if keys or words:
@@ -367,19 +387,36 @@ class Source:
 
 
 def read_sources(path: Path) -> list[Source]:
-    """One source per line: "Name | URL-or-path" (or just the URL/path).
-    Lines starting with "#" are ignored."""
+    """One source per line: "Name | URL-or-path | kind" — the kind is optional
+    (see SOURCE_KINDS), and a bare URL/path is its own name. Lines starting
+    with "#" are ignored. A local path is resolved relative to the file."""
     sources = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if "|" in line:
-            name, origin = (p.strip() for p in line.split("|", 1))
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) == 1:
+            name = origin = parts[0]
+            kind = UNSPECIFIED_KIND
         else:
-            name = origin = line
-        sources.append(Source(name, origin))
+            name, origin = parts[0], parts[1]
+            kind = (parts[2].lower() if len(parts) > 2 and parts[2] else UNSPECIFIED_KIND)
+        if not origin.startswith(("http://", "https://")) and not Path(origin).expanduser().is_absolute():
+            origin = str(path.parent / origin)
+        sources.append(Source(name, origin, kind))
     return sources
+
+
+def registry_path() -> Path | None:
+    """The registry shipped with the project: indices/sources.txt next to this
+    file (a clone), or share/nullius/sources.txt under the interpreter's
+    prefix (an installed copy). None when neither exists."""
+    for p in (Path(__file__).resolve().parent / "indices" / "sources.txt",
+              Path(sys.prefix) / "share" / "nullius" / "sources.txt"):
+        if p.is_file():
+            return p
+    return None
 
 
 class Indices:
@@ -415,7 +452,12 @@ class Indices:
             listed_in += l
             name_matches += n
         verdict = "listed" if listed_in else ("name-match" if name_matches else "unlisted")
+        kinds = sorted({e["kind"] for e in listed_in})
         return {"verdict": verdict, "listed_in": listed_in, "name_matches": name_matches,
+                "listed_kinds": kinds,
+                # Listed, but only by robots: reachable once, identity unknown.
+                # On a real batch this is where the scam templates sat.
+                "crawler_only": bool(kinds) and kinds == ["crawler"],
                 "sources_failed": failed}
 
 
@@ -724,7 +766,7 @@ def write_html_report(results: list[dict], out_path: Path,
            "a{color:#0969da}code,.lbl{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}"
            ".lbl{background:#fff8c5;border-radius:4px;padding:0 .3em}"
            ".ok{color:#1a7f37}.warn{color:#9a6700}.bad{color:#cf222e}.dim{color:#656d76}"
-           ".src{background:#ddf4ff;border-radius:4px;padding:0 .3em}")
+           ".src{background:#ddf4ff;border-radius:4px;padding:0 .3em;white-space:nowrap}")
     lines = ["<!doctype html><html><head><meta charset='utf-8'>"
              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
              f"<title>Nullius in Onion — report</title><style>{css}</style></head><body>",
@@ -735,8 +777,10 @@ def write_html_report(results: list[dict], out_path: Path,
         if not ix:
             return ""
         if ix["verdict"] == "listed":
-            who = " ".join(f"<span class='src'>{_esc(m)}</span>" for m in sorted({m["source"] for m in ix["listed_in"]}))
-            return f" — <b>listed by</b> {who}"
+            who = " ".join(f"<span class='src'>{_esc(name)}" + (f" <span class='dim'>{_esc(kind)}</span>" if kind != UNSPECIFIED_KIND else "") + "</span>"
+                           for name, kind in sorted({(m["source"], m["kind"]) for m in ix["listed_in"]}))
+            note = " <span class='warn'>(crawlers only)</span>" if ix.get("crawler_only") else ""
+            return f" — <b>listed by</b> {who}{note}"
         if ix["verdict"] == "name-match":
             names = ", ".join(f"<span class='src'>{_esc(m['source'])}</span> {_esc(m['name'])}" for m in ix["name_matches"][:3])
             return f" — <b>name-match</b> {names}"
@@ -1032,6 +1076,96 @@ def diff_main(argv: list[str]) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# indices: health of the sources themselves
+# --------------------------------------------------------------------------- #
+
+def health_path(sources_file: Path) -> Path:
+    return sources_file.with_name(sources_file.stem + "-health.json")
+
+
+def source_status(src: "Source", last: dict | None) -> tuple[str, str]:
+    """(status, note). FAILED: did not load. KIND?: kind not in the vocabulary.
+    EMPTY: loaded, no addresses. CHANGED: the host count moved by more than
+    half against the last known — the page probably changed shape, or the
+    index itself did. NEW: no last known. OK otherwise."""
+    if src.error:
+        return "FAILED", src.error
+    if not src.kind_known:
+        return "KIND?", f"unknown kind {src.kind!r}"
+    n = len(src.hosts)
+    if n == 0:
+        return "EMPTY", "loaded, but no addresses in it"
+    if last is None:
+        return "NEW", f"{n} hosts, no earlier count"
+    before = last.get("hosts", 0)
+    if before and (n < before * 0.5 or n > before * 2):
+        return "CHANGED", f"{before} -> {n} hosts ({(n - before) / before * 100:+.0f}%) — page format changed?"
+    return "OK", f"{n} hosts" + (f" ({(n - before) / before * 100:+.0f}% vs {last.get('checked', '?')})" if before else "")
+
+
+def indices_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(
+        prog=f"{Path(sys.argv[0]).name} indices",
+        description="Check the index sources themselves: load every source once, report how many "
+                    "addresses each yields, and compare with the last known count in the health "
+                    "file next to the sources file (<sources>-health.json). A source that fails, "
+                    "moved by more than half, or has an unknown kind makes the exit status 3.")
+    p.add_argument("--registry", action="store_true", help="the registry shipped with the project (indices/sources.txt)")
+    p.add_argument("--indices", type=Path, metavar="FILE", help='a sources file, "Name | URL-or-path | kind" per line')
+    p.add_argument("--update", action="store_true",
+                   help="write the current counts to the health file (failed sources keep their last known entry)")
+    p.add_argument("--proxy", default=DEFAULT_PROXY, help=f"SOCKS proxy URL (default: {DEFAULT_PROXY})")
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help=f"seconds per request (default: {DEFAULT_TIMEOUT})")
+    args = p.parse_args(argv)
+
+    files: list[Path] = []
+    if args.registry:
+        reg = registry_path()
+        if reg is None:
+            print("--registry: no indices/sources.txt next to nullius.py and none under sys.prefix/share/nullius", file=sys.stderr)
+            return 2
+        files.append(reg)
+    if args.indices:
+        if not args.indices.is_file():
+            print(f"indices file not found: {args.indices}", file=sys.stderr)
+            return 2
+        files.append(args.indices)
+    if not files:
+        print("indices: pass --registry and/or --indices FILE", file=sys.stderr)
+        return 2
+
+    cfg = Config(proxy=args.proxy, timeout=args.timeout, delay=(1.0, 2.0))
+    session = requests.Session()
+    session.proxies = {"http": cfg.proxy, "https": cfg.proxy}
+    session.headers["User-Agent"] = TOR_BROWSER_UA
+
+    exit_code = 0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for sources_file in files:
+        sources = read_sources(sources_file)
+        hp = health_path(sources_file)
+        health: dict = json.loads(hp.read_text(encoding="utf-8")) if hp.is_file() else {}
+        remote = sum(1 for s in sources if s.is_remote)
+        print(f"{sources_file}: {len(sources)} source(s), {remote} remote via {cfg.proxy}"
+              + (f"; last known: {hp.name}" if health else "; no health file yet"), file=sys.stderr)
+        Indices(sources).load(session, cfg)
+        width = max((len(s.name) for s in sources), default=6)
+        print(f"{'source':<{width}}  {'kind':<13} {'hosts':>6} {'names':>6}  status", flush=True)
+        for src in sources:
+            status, note = source_status(src, health.get(src.name))
+            if status not in ("OK", "NEW"):
+                exit_code = 3
+            print(f"{src.name:<{width}}  {src.kind:<13} {len(src.hosts):>6} {src.names:>6}  {status}: {note}", flush=True)
+            if args.update and not src.error:
+                health[src.name] = {"kind": src.kind, "hosts": len(src.hosts), "names": src.names,
+                                    "files": src.files, "checked": today, "origin": src.origin}
+        if args.update:
+            hp.write_text(json.dumps(health, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            print(f"Health: {hp}", file=sys.stderr)
+    return exit_code
+
+
+# --------------------------------------------------------------------------- #
 # Batch: journal, checkpoints, stop rule
 # --------------------------------------------------------------------------- #
 
@@ -1220,9 +1354,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     "through Tor (status code + <title>, circuit controls at the end), plus an optional "
                     "cross-check against any index sources you name. Details: README.md",
         epilog='targets file: one per line, "Name | URL" or just "URL". '
-               'sources file (--indices): one per line, "Name | URL-or-path". '
+               'sources file (--indices): one per line, "Name | URL-or-path | kind". '
                'Lines starting with # are ignored. '
-               'Compare two runs: %(prog)s diff OLD.json NEW.json',
+               'Compare two runs: %(prog)s diff OLD.json NEW.json. '
+               'Check the index sources themselves: %(prog)s indices --registry',
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("targets", type=Path,
@@ -1239,7 +1374,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="skip the circuit control targets (not recommended)")
     p.add_argument("--no-html", action="store_true", help="write JSON only")
     p.add_argument("--indices", type=Path, metavar="FILE",
-                   help='sources list, one per line "Name | URL-or-path" — see the Index cross-check section')
+                   help='sources list, one per line "Name | URL-or-path | kind" — see the Index cross-check section')
+    p.add_argument("--registry", action="store_true",
+                   help="also use the registry shipped with the project (indices/sources.txt)")
     p.add_argument("--catalog", type=Path, nargs="+", metavar="PATH",
                    help="add a local file or directory tree as an index source (shortcut for a path line in --indices)")
     p.add_argument("--indices-only", action="store_true",
@@ -1273,12 +1410,15 @@ def print_indices_summary(indices: "Indices", results: list[dict]) -> None:
     counts = {"listed": 0, "name-match": 0, "unlisted": 0}
     for r in results:
         counts[r["indices"]["verdict"]] += 1
+    crawler_only = sum(1 for r in results if r["indices"].get("crawler_only"))
     print(f"Indices: {counts['listed']} listed, {counts['name-match']} name-match, "
-          f"{counts['unlisted']} unlisted.", file=sys.stderr)
+          f"{counts['unlisted']} unlisted."
+          + (f" Of the listed, {crawler_only} only by crawlers." if crawler_only else ""), file=sys.stderr)
     for r in results:
         ix = r["indices"]
         if ix["verdict"] == "listed":
-            who = ", ".join(sorted({m["source"] for m in ix["listed_in"]}))
+            who = ", ".join(f"{name} ({kind})" if kind != UNSPECIFIED_KIND else name
+                            for name, kind in sorted({(m["source"], m["kind"]) for m in ix["listed_in"]}))
             print(f"  listed: {r['name']} -> {who}", file=sys.stderr)
         elif ix["verdict"] == "name-match":
             hits = "; ".join(f"{m['source']}: {m['name']} <{m['host'][:24]}…>" for m in ix["name_matches"][:3])
@@ -1289,6 +1429,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["diff"]:
         return diff_main(argv[1:])
+    if argv[:1] == ["indices"]:
+        return indices_main(argv[1:])
     args = parse_args(argv)
     cfg = Config(proxy=args.proxy, timeout=args.timeout, delay=tuple(args.delay))
 
@@ -1301,15 +1443,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     sources: list[Source] = []
+    if args.registry:
+        reg = registry_path()
+        if reg is None:
+            print("--registry: no indices/sources.txt next to nullius.py and none under sys.prefix/share/nullius — "
+                  "pass --indices with a copy of the registry file instead", file=sys.stderr)
+            return 2
+        sources += read_sources(reg)
     if args.indices:
         if not args.indices.is_file():
             print(f"indices file not found: {args.indices}", file=sys.stderr)
             return 2
         sources += read_sources(args.indices)
     for path in args.catalog or []:
-        sources.append(Source(str(path), str(path)))
+        sources.append(Source(str(path), str(path), "self"))
+    for src in sources:
+        if not src.kind_known:
+            print(f"  source {src.name}: unknown kind {src.kind!r} (known: {', '.join(SOURCE_KINDS)})", file=sys.stderr)
     if args.indices_only and not sources:
-        print("--indices-only needs --indices and/or --catalog", file=sys.stderr)
+        print("--indices-only needs --registry, --indices and/or --catalog", file=sys.stderr)
         return 2
     if args.stop_terms is not None and not args.stop_terms.is_file():
         print(f"stop-terms file not found: {args.stop_terms}", file=sys.stderr)

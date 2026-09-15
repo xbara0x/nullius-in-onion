@@ -1,0 +1,35 @@
+# Nullius in Onion — registry of index sources.
+#
+# One source per line:  Name | URL-or-path | kind
+# Remote sources are fetched once per run through the Tor proxy; local paths
+# are read from disk, relative to this file. Kinds (what "listed by" means):
+#   curated        a person verified the identity behind the address
+#   crawler        a robot reached the address once; nothing about identity
+#   institutional  the operator itself publishes the address
+#   tracker        a thematic tracker maintains it
+#   community      a list curated by pull request
+# Every source has a card in SOURCES.md; the bar for adding one is in
+# CONTRIBUTING.md. Check them all with:  nullius indices --registry
+
+# -- curated -----------------------------------------------------------------
+dark.fail                       | https://dark.fail/                                                                   | curated
+tor.taxi                        | https://tor.taxi/                                                                    | curated
+
+# -- crawler -----------------------------------------------------------------
+Ahmia                           | https://ahmia.fi/onions/                                                             | crawler
+
+# -- institutional -----------------------------------------------------------
+Tor Project onion services      | https://onion.torproject.org/                                                        | institutional
+SecureDrop directory            | https://securedrop.org/api/v1/directory/                                             | institutional
+
+# -- tracker -----------------------------------------------------------------
+OGransomwatch                   | https://raw.githubusercontent.com/GavinEke/OGransomwatch/main/groups.json            | tracker
+
+# -- community ---------------------------------------------------------------
+real-world-onion-sites          | https://raw.githubusercontent.com/alecmuffett/real-world-onion-sites/master/README.md | community
+Wikipedia: Tor onion services   | https://en.wikipedia.org/wiki/List_of_Tor_onion_services                             | community
+deepdarkCTI forum               | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/forum.md                 | community
+deepdarkCTI ransomware          | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/ransomware_gang.md       | community
+deepdarkCTI markets             | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/markets.md               | community
+deepdarkCTI search engines      | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/search_engines.md        | community
+deepdarkCTI others              | https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/others.md                | community

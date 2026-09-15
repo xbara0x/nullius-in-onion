@@ -8,8 +8,10 @@ motto; this is that attitude applied to a list of `.onion` (or clearnet)
 addresses. It answers three questions, honestly:
 
 1. **Is it up?** — one plain GET through Tor, status code and page title, nothing else.
-2. **Who already lists it?** — cross-checked against any indices you point it at
-   (dark.fail, tor.taxi, Ahmia, a catalog on disk, your own bookmarks).
+2. **Who already lists it?** — cross-checked against a curated **registry of
+   public indices** (dark.fail, tor.taxi, Ahmia, the Tor Project's own list,
+   SecureDrop's directory, a ransomware tracker, deepdarkCTI…), each with a
+   *kind* that says what "listed" is worth — plus anything of your own.
 3. **What changed since last time?** — a diff between two runs: went offline,
    came back, new title, new verdict — with each run's circuit controls in view.
 
@@ -17,7 +19,7 @@ It never runs JavaScript, never logs in, never crawls, and never decides for
 you: it reports, with the reasons, and tells you when its own measurement
 cannot be trusted.
 
-**Status:** v0.4.0 — working and tested; the JSON layout may still change,
+**Status:** v0.5.0 — working and tested; the JSON layout may still change,
 and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
 
 <p align="center">
@@ -151,36 +153,56 @@ is. A source that lists the same *name* with a *different* address tells you
 you are looking at a second address of a known entity — a mirror, or a
 phishing clone.
 
-Sources go in a text file, one per line. `examples/indices.txt` ships with
-three; add whatever lists addresses — a crawler's public list, a blog post, a
-saved forum thread, a markdown catalog like
-[deepdarkCTI](https://github.com/fastfire/deepdarkCTI), your own notes:
+**The registry.** The project ships a curated registry of public indices in
+[`indices/sources.txt`](indices/sources.txt) — `--registry` uses it. Every
+entry has a card in [`indices/SOURCES.md`](indices/SOURCES.md) saying what
+the source is, who runs it, how it decides what to list, and therefore what
+"listed by it" is worth; every entry carries a **kind**:
+
+| kind | "listed by" means | in the registry |
+|---|---|---|
+| `curated` | a person verified the identity behind the address (PGP, ownership proof) | dark.fail, tor.taxi |
+| `crawler` | a robot reached the address once — nothing about identity | Ahmia |
+| `institutional` | the operator itself publishes the address | Tor Project's own services, SecureDrop directory |
+| `tracker` | a thematic tracker maintains it | OGransomwatch (ransomware leak sites) |
+| `community` | curated by pull request, one maintainer reviewing | real-world-onion-sites, Wikipedia's list, deepdarkCTI |
+| `self` | your own catalog or bookmarks | whatever you pass with `--catalog` |
+
+The registry is the part of this project that grows by contribution: one
+line and one card per source, by pull request. The bar — an index enumerates
+addresses, has an operator that can be named, and loads with a plain GET — is
+in [`CONTRIBUTING.md`](CONTRIBUTING.md), and it is what keeps a "hidden wiki"
+clone from laundering scam mirrors into *listed*.
+
+**Your own sources** go in a text file of the same shape, one per line
+(`examples/indices.txt` is a template) — a saved page, a blog post, a
+markdown catalog, your notes:
 
 ```
-# indices.txt
-dark.fail   | https://dark.fail/
-tor.taxi    | https://tor.taxi/
-ahmia       | https://ahmia.fi/onions/
-my catalog  | ~/src/deepdarkCTI
+# my-sources.txt            Name | URL-or-path | kind
+my bookmarks  | ~/notes/onions.md   | self
+team catalog  | ../deepdarkCTI      | community
 ```
 
 Remote sources are fetched **once per run**, through the same Tor proxy as
 everything else. Local paths (a file or a whole directory tree) are read from
-disk. `--catalog PATH` is a shortcut for one local source.
+disk, relative to the sources file. `--catalog PATH` is a shortcut for one
+local source of kind `self`. `--registry`, `--indices` and `--catalog`
+combine.
 
 ```mermaid
 flowchart LR
     subgraph sources ["index sources — loaded once per run"]
         direction TB
-        S1["dark.fail<br/><i>remote, via Tor</i>"]
-        S2["tor.taxi<br/><i>remote, via Tor</i>"]
-        S3["ahmia.fi/onions<br/><i>remote, via Tor</i>"]
-        S4["~/src/deepdarkCTI<br/><i>local tree</i>"]
+        S1["dark.fail · <b>curated</b><br/><i>remote, via Tor</i>"]
+        S2["tor.taxi · <b>curated</b><br/><i>remote, via Tor</i>"]
+        S3["ahmia.fi/onions · <b>crawler</b><br/><i>remote, via Tor</i>"]
+        S4["~/src/deepdarkCTI · <b>self</b><br/><i>local tree</i>"]
     end
     sources --> IDX[(hosts + names<br/>per source)]
     T([each target:<br/>host · label · measured title]) --> Q1{exact host<br/>in any source?}
     IDX --> Q1
-    Q1 -- yes --> L["<b>listed</b><br/>listed_in: who, where, line"]
+    Q1 -- yes --> L["<b>listed</b><br/>listed_in: who, kind, where, line<br/>crawler_only if robots alone"]
     Q1 -- no --> Q2{same normalized<br/>name in any source?}
     Q2 -- yes --> N["<b>name-match</b><br/>second address of a known entity:<br/>mirror or clone — <i>your call</i>"]
     Q2 -- no --> U["<b>unlisted</b><br/>meaningful only if no<br/>source failed to load"]
@@ -194,27 +216,47 @@ flowchart LR
 
 ```bash
 # triage a list before spending a second of Tor time on the targets
-python3 nullius.py new-links.txt --indices examples/indices.txt --indices-only
+python3 nullius.py new-links.txt --registry --indices-only
 
-# measure and cross-check in one run
-python3 nullius.py new-links.txt --indices examples/indices.txt --catalog ~/src/deepdarkCTI
+# measure and cross-check in one run, against the registry and your own catalog
+python3 nullius.py new-links.txt --registry --catalog ~/src/deepdarkCTI
 ```
 
 Each record gains an `indices` block with a verdict and the evidence:
 
 | `verdict` | What it means |
 |---|---|
-| `listed` | the exact host is in at least one source — `listed_in` says which, with the line |
+| `listed` | the exact host is in at least one source — `listed_in` says which (source, kind, line); `listed_kinds` summarizes the kinds |
 | `name-match` | the host is not, but an entry with the same name is — `name_matches` says which. Mirror or clone? **That decision is yours.** |
 | `unlisted` | neither — and only meaningful if `sources_failed` is empty |
 
 **Two things to keep in mind.** *Listed* means different things for different
-sources: on tor.taxi it means "official address, PGP-verified"; on Ahmia it
-means "exists and was crawled", nothing more — the record tells you *who*, the
-weighing is yours. And a source that could not be loaded (unreachable, HTTP
-error, or a page that came back with no addresses in it because its format
-changed) is reported as failed and makes the exit status `3`: an `unlisted`
-from a run with a failed source is not a result.
+kinds: `listed by tor.taxi (curated)` is an identity claim; `listed by ahmia
+(crawler)` means "was reachable once", nothing more. A target listed **only by
+crawlers** is flagged `crawler_only` in the record, in the terminal summary
+and in the report — on a real batch of 1,038 addresses, that is exactly
+where 33 market "mirrors" with identical titles sat: reachable, in no curated
+index, a scam template. And a source that could not be loaded (unreachable,
+HTTP error, or a page that came back with no addresses in it because its
+format changed) is reported as failed and makes the exit status `3`: an
+`unlisted` from a run with a failed source is not a result.
+
+**Checking the sources themselves.** Indices die and change layout. `nullius
+indices --registry` loads every source once and reports what each yields
+against the last known count in `indices/sources-health.json`:
+
+```
+source                         kind           hosts  names  status
+dark.fail                      curated           36      6  OK: 36 hosts (+0% vs 2026-09-15)
+Ahmia                          crawler         9025      0  OK: 9025 hosts (+0% vs 2026-09-15)
+some-list                      community         12      9  CHANGED: 800 -> 12 hosts (-98%) — page format changed?
+another                        curated            0      0  FAILED: HTTP 404
+```
+
+`FAILED`, `EMPTY`, `CHANGED` (moved by more than half) or an unknown kind make
+the exit status `3`; `--update` writes the current counts back, keeping the
+last known entry of a source that failed. Works on your own file too:
+`nullius indices --indices my-sources.txt`.
 
 <details>
 <summary><b>How name matching works</b> (click to expand)</summary>
@@ -391,8 +433,9 @@ clearnet entry must be the whole host.
 | `--delay MIN MAX` | `2 5` | random pause between requests, in seconds |
 | `--no-controls` | off | skip the circuit controls — not recommended |
 | `--no-html` | off | write JSON only |
-| `--indices FILE` | — | sources list, one per line `Name \| URL-or-path` |
-| `--catalog PATH …` | — | add a local file or tree as an index source |
+| `--indices FILE` | — | sources list, one per line `Name \| URL-or-path \| kind` |
+| `--registry` | off | also use the registry shipped with the project (`indices/sources.txt`) |
+| `--catalog PATH …` | — | add a local file or tree as an index source of kind `self` |
 | `--indices-only` | off | cross-check only; measure no target |
 | `--diff-previous` | off | after the run, compare with the most recent earlier run of the same list in `--out-dir`; writes `<base>-diff.json` |
 | `--journal FILE` | — | append every record as measured; relaunch skips what is there |
@@ -403,6 +446,8 @@ clearnet entry must be the whole host.
 
 `diff OLD.json NEW.json [--json PATH]` compares two result files — see
 [What changed since last time](#what-changed-since-last-time--diff).
+`indices [--registry] [--indices FILE] [--update]` checks the index sources
+themselves — see [Who lists it](#who-lists-it--index-cross-check).
 
 ### Files
 
@@ -412,6 +457,9 @@ results/<list>-<YYYYmmdd-HHMM>-controls.json   the control targets
 results/<list>-<YYYYmmdd-HHMM>.html            human-readable report
 results/<list>-indices-<YYYYmmdd-HHMM>.json    with --indices-only
 results/<list>-<YYYYmmdd-HHMM>-diff.json       with --diff-previous
+indices/sources.txt                            the registry (Name | URL | kind)
+indices/SOURCES.md                             one card per source
+indices/sources-health.json                    last known counts, written by `indices --update`
 ```
 
 Nothing is ever overwritten: a second run in the same minute gets a `-2`
@@ -420,7 +468,7 @@ suffix. File names use local time; `checked_at` inside the records is UTC.
 The HTML report groups targets by what happened to them and carries the
 index verdicts inline:
 
-<p align="center"><img src="docs/report.png" alt="HTML report: online targets with title, online with caveat (TLS not verified), offline, circuit controls — each line with its 'listed by' sources" width="820"></p>
+<p align="center"><img src="docs/report.png" alt="HTML report: online targets with title, online with caveat (TLS not verified), offline, circuit controls — each line with its 'listed by' sources and their kind (curated, institutional, community, crawler)" width="820"></p>
 
 ### Fields
 
@@ -450,9 +498,10 @@ Control records add `checkpoint` (`start`, `after N`, `end`).
 A journal is the same records, one per line, plus checkpoint lines:
 `{"checkpoint": "after 250", "online": 3, "total": 3, "at": "<UTC>"}`.
 
-With `--indices` or `--catalog`, every record also carries `indices`:
-`verdict`, `listed_in`, `name_matches` (each entry: `source`, `name`, `host`,
-`where`, `line`), `sources_failed`.
+With `--registry`, `--indices` or `--catalog`, every record also carries
+`indices`: `verdict`, `listed_in`, `name_matches` (each entry: `source`,
+`kind`, `name`, `host`, `where`, `line`), `listed_kinds` (sorted, unique),
+`crawler_only`, `sources_failed`.
 
 A diff file: `old` and `new` (`file`, `checked_at`, `targets`, `controls` as
 `{online, total}` or `null`), `old_suspect`, `new_suspect`, the buckets
@@ -466,7 +515,7 @@ their total.
 |---|---|
 | `0` | run completed and can be trusted — for `diff`: no differences |
 | `1` | `diff` only: differences found, both runs trustworthy |
-| `3` | run completed, but **do not trust its negatives**: a control target failed (circuit suspect) or an index source failed to load; with `--controls-every`, the run stopped at a failed checkpoint — for `diff`: differences found, but one side's controls failed |
+| `3` | run completed, but **do not trust its negatives**: a control target failed (circuit suspect) or an index source failed to load; with `--controls-every`, the run stopped at a failed checkpoint — for `diff`: differences found, but one side's controls failed — for `indices`: a source failed, came back empty, moved by more than half, or has an unknown kind |
 | `2` | usage error |
 
 Anything else is a crash. Scripts and cron jobs should treat any non-zero

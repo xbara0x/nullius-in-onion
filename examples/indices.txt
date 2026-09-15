@@ -1,9 +1,17 @@
-# Index sources, one per line: "Name | URL-or-path". Lines starting with # are ignored.
-# Remote sources are fetched once per run through the proxy; local paths are read from disk.
-# Add anything that lists onion addresses: a curated index, a public list, a saved page,
-# a markdown catalog, your own bookmarks.
-dark.fail | https://dark.fail/
-tor.taxi  | https://tor.taxi/
-ahmia     | https://ahmia.fi/onions/
-# a local catalog works the same way (also reachable via --catalog PATH):
-# deepdarkCTI | ~/src/deepdarkCTI
+# A sources file of your own, one per line:  Name | URL-or-path | kind
+# Lines starting with # are ignored. Remote sources are fetched once per run
+# through the proxy; local paths are read from disk, relative to this file.
+# The kind (optional) says what "listed by" means — see indices/sources.txt.
+#
+# The project's registry of public indices ships in indices/sources.txt; use it
+# with --registry and keep this file for what is yours:
+#
+# my bookmarks   | ~/notes/onions.md           | self
+# team catalog   | ../deepdarkCTI              | community
+# a saved page   | saved/dread-links.html      | community
+#
+# The three below are also in the registry; they stay here so that a file of
+# your own has a working starting point.
+dark.fail | https://dark.fail/       | curated
+tor.taxi  | https://tor.taxi/        | curated
+ahmia     | https://ahmia.fi/onions/ | crawler

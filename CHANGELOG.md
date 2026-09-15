@@ -7,6 +7,46 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-15
+
+### Added
+- **The registry.** `indices/sources.txt` ships a curated list of public
+  index sources — dark.fail and tor.taxi (curated), Ahmia (crawler), the Tor
+  Project's own onion services and the SecureDrop directory (institutional),
+  OGransomwatch's ransomware leak-site tracker (tracker), Alec Muffett's
+  real-world-onion-sites, Wikipedia's list and five deepdarkCTI files
+  (community) — 13 entries, each with a card in `indices/SOURCES.md` (what,
+  who runs it, how it decides what to list, since when, the URLs behind
+  every claim). `--registry` uses it, alone or together with `--indices` and
+  `--catalog`. An installed copy finds it under `sys.prefix/share/nullius`.
+- **`kind` per source**, the third column of a sources file: `curated`,
+  `crawler`, `institutional`, `tracker`, `community`, `self` (what
+  `--catalog` gets) — an unknown kind is accepted with a warning. Every
+  `listed_in` / `name_matches` entry carries `kind`; every `indices` block
+  gains `listed_kinds` and `crawler_only` (listed, but only by robots — where
+  the scam templates sat on a real batch). The terminal summary prints the
+  kind next to each source and counts the crawler-only targets; the HTML
+  report shows the kind on each chip and flags *(crawlers only)*.
+- **`indices` subcommand** — the maintenance instrument for the registry
+  (and for any sources file): loads every source once, reports hosts and
+  names per source, and compares with the last known count in
+  `<sources>-health.json`. `FAILED`, `EMPTY`, `CHANGED` (moved by more than
+  half) or `KIND?` make the exit status `3`; `--update` writes the counts
+  back, keeping the last known entry of a source that failed.
+  `indices/sources-health.json` ships with the counts of 2026-09-15.
+- `CONTRIBUTING.md`: the bar for a new source (enumerates addresses, has an
+  operator that can be named, loads with a plain GET; link dumps and search
+  engines do not qualify), the PR checklist (paste the `indices` table
+  line), and the rules for code.
+- 8 offline tests for kinds, the registry file, `source_status` and the
+  `indices` subcommand; 72 in all.
+
+### Changed
+- A local path in a sources file is resolved relative to the file, not to
+  the working directory.
+- `examples/indices.txt` is now a template for a file of your own; the
+  README's examples use `--registry`.
+
 ## [0.4.0] — 2026-09-15
 
 ### Changed
@@ -179,7 +219,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.1.0...v0.2.0
