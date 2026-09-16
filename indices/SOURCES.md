@@ -1,4 +1,4 @@
-# Index sources — one card per entry in `sources.txt`
+# Index sources — a card per source (a few families, like deepdarkCTI's files and the Wikipedia lists, share one)
 
 The registry answers one question per address: **who already lists it?** — and
 the answer is only as good as the *who*. Each card says what the source is,

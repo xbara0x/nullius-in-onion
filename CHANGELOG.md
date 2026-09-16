@@ -55,7 +55,7 @@ bump may change the JSON layout and says so under **Changed**.
 - README: *What this is not* — what the Tor Project's Onionprobe is for
   (monitoring endpoints you operate: loop, retries, TLS, Prometheus,
   Grafana, Alertmanager) and what this tool is for instead.
-- 12 offline tests with a scripted fake `stem` (published; FAILED then
+- 13 offline tests with a scripted fake `stem` (published; FAILED then
   silence; FAILED then RECEIVED; an outstanding request blocking the quiet
   period; RECEIVED just before the deadline; deadline with a lookup in
   flight; other reasons; connection, authentication and event-subscription

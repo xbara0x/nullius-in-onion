@@ -169,7 +169,7 @@ the source is, who runs it, how it decides what to list, and therefore what
 | `institutional` | the operator itself publishes the address | Tor Project's own services, SecureDrop directory |
 | `tracker` | a thematic tracker maintains it | OGransomwatch (ransomware leak sites) |
 | `community` | curated by pull request, one maintainer reviewing | real-world-onion-sites, Wikipedia's list, deepdarkCTI |
-| `search` | a search engine **queried per target** with the address — crawler-grade evidence | OnionLand Search, Tor66 |
+| `search` | a search engine **queried per target** with the address — crawler-grade evidence | OnionLand Search |
 | `research` | a published measurement dataset; what an entry proves is what the study measured — the card says | KAU's Onion-Location measurements, onionsec.csv |
 | `self` | your own catalog or bookmarks | whatever you pass with `--catalog` |
 

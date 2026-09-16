@@ -10,6 +10,7 @@
 #   community      a list curated by pull request
 #   search         a search engine queried per target ({query} in the URL)
 #   research       a published measurement dataset; the card says what an entry proves
+#   self           your own catalog via --catalog — not a registry kind, not listed here
 # Every source has a card in SOURCES.md; the bar for adding one is in
 # CONTRIBUTING.md. Check them all with:  nullius indices --registry
 
