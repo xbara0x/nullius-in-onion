@@ -498,6 +498,19 @@ page like that is read once, by a program, and never again by anyone.
 The exclusions file is plain text — `<host> <date> term:<term>
 where:<label|title|meta>`, `#` comments — and a Markdown table with the
 host in the first cell is read too, so a list kept by hand works as it is.
+
+**`--categories FILE` — what a target is, in a word or two.** A page the tool
+fetched for its title has more to say about what it *is*. Give it a topic
+lexicon — `"tag | regex"` per line, the text after the first `|` a single
+case-insensitive regex (so it may use `|` for alternation) — and every ONLINE
+page is tagged with the categories whose pattern matches its text (`market`,
+`forum`, `directory`, `crypto`, `carding`, …). Only the tag names are kept,
+never a fragment of the page: this says what a target is, it does not copy it.
+Like the stop terms, the vocabulary is yours; the tool ships
+`examples/categories.txt` and loads none by default, so the body is read only
+when you ask. And when you do, the stop rule reads it too — a stop term
+anywhere in the page, not only in its title, now makes the target `EXCLUDED`
+and keeps nothing.
 An `.onion` entry may be a prefix of the address (16 characters or more); a
 clearnet entry must be the whole host.
 
@@ -578,6 +591,7 @@ anything, is yours.
 | `--controls-every N` | 0 | controls at the start, after every N targets and at the end; a failed checkpoint stops the run |
 | `--stop-terms FILE` | — | one regex per line; a matching label, title or meta text makes the target `EXCLUDED` |
 | `--exclusions FILE` | — | do-not-fetch list, read before the run and appended on every exclusion |
+| `--categories FILE` | — | topic tags for each ONLINE page from a "tag then regex" lexicon; only tag names are kept, never page text |
 | `--descriptor` | off | for every OFFLINE `.onion`, ask the Tor control port whether its descriptor is published (needs `stem`) |
 | `--control-port PORT` | 9051 | Tor control port; Tor Browser's tor listens on 9151 |
 | `--control-socket PATH` | — | Tor control socket, instead of a port |

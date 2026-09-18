@@ -86,7 +86,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.8.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.9.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -105,8 +105,8 @@ TOR_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox
 # problem is the path, not the targets.
 CONTROL_TARGETS = [
     ("[control] Tor Project check", "https://check.torproject.org/api/ip"),
-    ("[control] DuckDuckGo (onion)",
-     "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/"),
+    ("[control] BBC News (onion)",
+     "https://bbcnewsd73hkzno2ini43t4gblxvycyac5aw4gnv7t2rccijh7745uqd.onion/"),
     ("[control] Ahmia (onion)",
      "http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/"),
 ]
@@ -681,6 +681,80 @@ def extract_static_hints(html_text: str, soup: BeautifulSoup) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Topic tags — a controlled vocabulary, applied to a page already fetched
+# --------------------------------------------------------------------------- #
+
+def visible_text(soup: BeautifulSoup, cap: int = 200_000) -> str:
+    """The page's text as a browser would show it, plus the meta description
+    and keywords — for matching stop terms and topic patterns. It is read, not
+    kept: only tag names (or an exclusion) survive, never a fragment of it.
+    Script and style contents are skipped, without mutating the soup."""
+    parts: list[str] = []
+    for attrs in ({"name": "description"}, {"name": "keywords"},
+                  {"property": "og:description"}, {"property": "og:title"}):
+        tag = soup.find("meta", attrs=attrs)
+        content = tag.get("content") if tag else None
+        if content:
+            parts.append(content.strip())
+    for node in soup.find_all(string=True):
+        parent = node.parent.name if node.parent else ""
+        if parent in ("script", "style", "noscript", "template"):
+            continue
+        text = node.strip()
+        if text:
+            parts.append(text)
+    return " ".join(parts)[:cap]
+
+
+class Lexicon:
+    """A controlled vocabulary for topic tagging. Each tag carries one or more
+    case-insensitive regexes; a page earns the tag when any of them matches its
+    text. Like the stop terms, the vocabulary is yours — the tool ships an
+    example (examples/categories.txt) and loads none by default — and, like the
+    stop terms, only the tag *names* are ever recorded. The text is matched in
+    memory and dropped: this says what a target is, it does not copy it."""
+
+    def __init__(self, tags: list[tuple[str, list[re.Pattern]]]):
+        self.tags = tags
+
+    @property
+    def active(self) -> bool:
+        return bool(self.tags)
+
+    def tag(self, text: str) -> list[str]:
+        if not text:
+            return []
+        return [name for name, pats in self.tags if any(p.search(text) for p in pats)]
+
+
+def read_categories(path: Path) -> Lexicon:
+    """One tag per line: "tag | regex". The text after the first "|" is a single
+    regex, so it may use "|" for alternation; a page gets the tag if the regex
+    matches its text. Repeated tag names add more regexes, keeping first-seen
+    order. "#" comments and blank lines are ignored. A malformed regex is an
+    error named with its line, not a tag that silently never matches."""
+    order: list[str] = []
+    by_name: dict[str, list[re.Pattern]] = {}
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, expr = line.partition("|")
+        name, expr = name.strip(), expr.strip()
+        if not sep or not name or not expr:
+            continue
+        try:
+            pat = re.compile(expr, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError(f"{path}:{lineno}: bad regex {expr!r}: {exc}")
+        if name not in by_name:
+            by_name[name] = []
+            order.append(name)
+        by_name[name].append(pat)
+    return Lexicon([(name, by_name[name]) for name in order])
+
+
+# --------------------------------------------------------------------------- #
 # Fetching
 # --------------------------------------------------------------------------- #
 
@@ -822,7 +896,8 @@ def fetch(uri: str, session: requests.Session, cfg: Config) -> tuple[Fetched, bo
         return alt, is_onion(uri) and alt.url.startswith("https://")
 
 
-def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> dict:
+def check_one(name: str, uri: str, session: requests.Session, cfg: Config,
+              categories: "Lexicon | None" = None, stop: "StopRule | None" = None) -> dict:
     result = {
         "name": name,
         "uri": uri,
@@ -844,6 +919,17 @@ def check_one(name: str, uri: str, session: requests.Session, cfg: Config) -> di
         result["needs_js_rendering"] = False
 
         result["content_type"] = resp.content_type
+        if ((categories is not None and categories.active) or (stop is not None and stop.terms)) \
+                and (is_html_response(resp) or looks_like_html(resp.text)):
+            page_text = visible_text(soup)
+            body_term = stop.match(page_text) if (stop is not None and stop.terms) else None
+            if body_term:
+                # We read the body for tags, so the stop rule now sees it too: a
+                # hit here discards the whole record downstream — no tags, no
+                # title, nothing. apply_stop_rule() acts on this marker.
+                result["_stop_body_term"] = body_term
+            elif categories is not None and categories.active:
+                result["categories"] = categories.tag(page_text)
         if not title and not is_html_response(resp):
             result["title_source"] = "not_html"  # JSON / plain text: no title expected
         elif looks_like_challenge(title) or (
@@ -1060,8 +1146,10 @@ def write_html_report(results: list[dict], out_path: Path,
     for r in resolved:
         title = r.get("title") or "(no title)"
         note = " [via meta tag, not &lt;title&gt;]" if r.get("title_source") == "meta_tag" else ""
+        tags = r.get("categories")
+        tag_html = (" <span class='dim'>[" + ", ".join(_esc(t) for t in tags) + "]</span>") if tags else ""
         lines.append(f"<li><a href='{_esc(r['uri'])}' target='_blank'>{_esc(title)}</a>{note}"
-                     f" — target: {_esc(r['name'])}{cat_note(r)}</li>")
+                     f" — target: {_esc(r['name'])}{cat_note(r)}{tag_html}</li>")
     lines.append("</ol>")
 
     lines.append(f"<h1>Online, but title only via JavaScript ({len(needs_js)})</h1><ol>")
@@ -1668,8 +1756,13 @@ def excluded_record(name: str, uri: str, detail: str, term: str | None = None, w
 
 
 def apply_stop_rule(stop: StopRule, name: str, uri: str, r: dict) -> dict:
-    """The rule after a fetch: title first, then the meta text the placeholder
-    branch may have collected. A match replaces the whole record."""
+    """The rule after a fetch: the body (when it was read for topic tags),
+    then the title, then the meta text the placeholder branch may have
+    collected. A match replaces the whole record."""
+    body_term = r.pop("_stop_body_term", None)
+    if body_term:
+        stop.exclude(uri, body_term, "body")
+        return excluded_record(name, uri, "EXCLUDED (stop term in body)", body_term, "body")
     hints = r.get("static_hints") or {}
     for where, text in (("title", r.get("title")),
                         ("meta", " ".join(filter(None, (hints.get("meta_title"), hints.get("meta_description")))))):
@@ -1732,6 +1825,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--diff-previous", action="store_true",
                    help="after the run, compare it with the most recent earlier run of the same list "
                         "in --out-dir and write <base>-diff.json")
+    p.add_argument("--categories", type=Path, metavar="FILE",
+                   help='topic lexicon, "tag | regex" per line (text after the first | is one regex): '
+                        "tag each ONLINE page with the categories whose pattern matches its text. Only "
+                        "tag names are kept, never page text; the page is read once. Ships an example "
+                        "(examples/categories.txt), loads none by default. With --stop-terms, the stop "
+                        "rule then also sees the body.")
+
     b = p.add_argument_group("batch", "long lists: keep what a dying run measured, validate the circuit "
                                       "along the way, stop on what you do not want to read")
     b.add_argument("--journal", type=Path, metavar="FILE",
@@ -1830,6 +1930,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.stop_terms is not None and not args.stop_terms.is_file():
         print(f"stop-terms file not found: {args.stop_terms}", file=sys.stderr)
         return 2
+    if args.categories is not None and not args.categories.is_file():
+        print(f"categories file not found: {args.categories}", file=sys.stderr)
+        return 2
     if args.controls_every < 0:
         print("--controls-every must be 0 or a positive number", file=sys.stderr)
         return 2
@@ -1867,6 +1970,11 @@ def main(argv: list[str] | None = None) -> int:
         return 3 if any(s.error for s in sources) else 0
 
     stop = StopRule(args.stop_terms, args.exclusions)
+    try:
+        categories = read_categories(args.categories) if args.categories else None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     descriptors = DescriptorChecker(args.control_port, args.control_socket, args.descriptor_timeout) if args.descriptor else None
     journal = Journal(args.journal) if args.journal else None
     done: dict[str, dict] = journal.load() if journal else {}
@@ -1909,7 +2017,7 @@ def main(argv: list[str] | None = None) -> int:
             stop.exclude(uri, term, "label")
             r = excluded_record(name, uri, "EXCLUDED (stop term in label, not fetched)", term, "label")
         else:
-            r = apply_stop_rule(stop, name, uri, check_one(name, uri, session, cfg))
+            r = apply_stop_rule(stop, name, uri, check_one(name, uri, session, cfg, categories=categories, stop=stop))
             if indices is not None and r["status"] != "EXCLUDED":
                 r["indices"] = indices.lookup(uri, label=name, title=r.get("title") or "")
             if descriptors is not None and r["status"] == "OFFLINE" and is_onion(uri):

@@ -7,6 +7,31 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-09-18
+
+### Added
+- **`--categories FILE` — topic tags for the page already fetched.** A
+  controlled vocabulary, `"tag | regex"` per line (the text after the first
+  `|` is one regex, so it may use `|` for alternation); each ONLINE page is
+  tagged with the categories whose pattern matches its text, and only the tag
+  *names* are recorded — never a fragment of the page. The vocabulary is
+  yours; the tool ships an example (`examples/categories.txt`, 37 tags across
+  structure, commerce, community and high-signal categories) and loads none by
+  default, so without the flag the body is not scanned and behaviour is
+  unchanged. Tags appear as `categories` in the JSON and in the HTML report.
+- **The stop rule now also sees the body**, but only when `--categories` makes
+  the tool read it: a stop term found in the page text excludes the target as
+  `EXCLUDED (stop term in body)` and, as before, nothing about the page is
+  kept. This closes the gap where a page with a clean title and meta but a
+  stop term in its body would have been tagged instead of excluded.
+
+### Fixed
+- **A dead control no longer blocks every run.** The default circuit-check
+  targets carried DuckDuckGo's onion, which DuckDuckGo has retired; it never
+  answered, so the start checkpoint read "circuit suspect" and refused to
+  measure even on a healthy circuit. Replaced with the BBC News onion
+  (`bbcnewsd73hkzno2ini43t4gblxvycyac5aw4gnv7t2rccijh7745uqd.onion`).
+
 ## [0.8.0] — 2026-09-15
 
 ### Added

@@ -551,7 +551,7 @@ class DiffBetweenRuns(unittest.TestCase):
         out = d / "out"
         calls = iter([self.rec("A", "http://a.onion/"), self.rec("A", "http://a.onion/", "OFFLINE")])
         original = osc.check_one
-        osc.check_one = lambda name, uri, session, cfg: next(calls)
+        osc.check_one = lambda name, uri, session, cfg, **kw: next(calls)
         try:
             args = [str(t), "--out-dir", str(out), "--no-controls", "--no-html", "--delay", "0", "0", "--diff-previous"]
             with contextlib.redirect_stdout(io.StringIO()):
@@ -592,7 +592,7 @@ class Batch(unittest.TestCase):
     def script(self, answers: dict, controls_ok: list[bool]):
         """check_one answers by uri; measure_controls answers by call order."""
         calls = []
-        def fake_check(name, uri, session, cfg):
+        def fake_check(name, uri, session, cfg, **kw):
             calls.append(uri)
             return dict(answers[uri])
         it = iter(controls_ok)
@@ -1308,7 +1308,7 @@ class DescriptorCheck(unittest.TestCase):
                    "https://example.org/": {"name": "Clear", "uri": "https://example.org/", "checked_at": "x", "status": "OFFLINE",
                                             "status_detail": "OFFLINE", "http_code": None, "title": None, "error_class": "timeout"}}
         original = osc.check_one
-        osc.check_one = lambda name, uri, session, cfg: dict(answers[uri])
+        osc.check_one = lambda name, uri, session, cfg, **kw: dict(answers[uri])
         try:
             err = io.StringIO()
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
@@ -1334,7 +1334,7 @@ class DescriptorCheck(unittest.TestCase):
         off = lambda name, uri: {"name": name, "uri": uri, "checked_at": "x", "status": "OFFLINE", "status_detail": "OFFLINE",
                                  "http_code": None, "title": None, "error_class": "timeout"}
         original = osc.check_one
-        osc.check_one = lambda name, uri, session, cfg: off(name, uri)
+        osc.check_one = lambda name, uri, session, cfg, **kw: off(name, uri)
         try:
             err = io.StringIO()
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
@@ -1362,3 +1362,92 @@ class DescriptorCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+import re as _re_topic  # noqa: E402  (module already imported above; alias for the topic tests)
+
+
+class TopicTags(unittest.TestCase):
+    """--categories: controlled-vocabulary tags from a page already fetched, the
+    body-level stop rule, and that neither runs unless asked."""
+
+    def setUp(self):
+        self.cfg = osc.Config(osc.DEFAULT_PROXY, 5, (0, 0))
+
+    def _session(self, text, status=200, url="http://x.onion/"):
+        class R:
+            status_code = status
+            headers: dict = {}
+        R.text, R.url = text, url
+
+        class S:
+            def get(self, *a, **k):
+                return R()
+        return S()
+
+    def _lex(self, text):
+        f = Path(tempfile.mkstemp(suffix=".txt")[1])
+        f.write_text(text, encoding="utf-8")
+        return osc.read_categories(f)
+
+    def test_read_categories_first_pipe_only(self):
+        # the regex after the first | may itself contain | for alternation
+        lex = self._lex("shop | \\bshop\\b|\\bstore\\b\nforum | \\bforum\\b")
+        self.assertEqual([n for n, _ in lex.tags], ["shop", "forum"])
+        self.assertEqual(lex.tag("visit our store today"), ["shop"])
+        self.assertEqual(lex.tag("the shop forum"), ["shop", "forum"])
+
+    def test_read_categories_merges_repeated_tag(self):
+        lex = self._lex("x | \\bfoo\\b\nx | \\bbar\\b")
+        self.assertEqual(len(lex.tags), 1)
+        self.assertEqual(lex.tag("bar only"), ["x"])
+
+    def test_bad_regex_is_a_named_error(self):
+        with self.assertRaises(ValueError):
+            self._lex("bad | (unclosed")
+
+    def test_visible_text_skips_scripts(self):
+        soup = BeautifulSoup(
+            "<html><body>Hello <script>var market=1</script> World</body>"
+            "<meta name='description' content='desc-signal'></html>", "html.parser")
+        t = osc.visible_text(soup)
+        self.assertIn("Hello", t)
+        self.assertIn("World", t)
+        self.assertIn("desc-signal", t)   # meta description folded in
+        self.assertNotIn("market", t)     # script contents skipped
+
+    def test_check_one_tags_online_page(self):
+        html = ("<html><head><title>Acme</title>"
+                "<meta name='description' content='escrow vendor'></head>"
+                "<body>Add to cart. Pay with bitcoin.</body></html>")
+        lex = self._lex("market | add to cart|\\bvendor\\b|\\bescrow\\b\ncrypto | \\bbitcoin\\b")
+        r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, categories=lex)
+        self.assertEqual(r["status"], "ONLINE")
+        self.assertIn("market", r["categories"])
+        self.assertIn("crypto", r["categories"])
+
+    def test_no_categories_by_default(self):
+        html = "<html><title>Acme</title><body>bitcoin market</body></html>"
+        r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg)
+        self.assertNotIn("categories", r)   # body not scanned unless asked
+
+    def test_stop_term_in_body_excludes(self):
+        sr = osc.StopRule()
+        sr.terms = [_re_topic.compile("forbidden", _re_topic.IGNORECASE)]
+        html = "<html><head><title>Clean Title</title></head><body>a forbidden word</body></html>"
+        r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, stop=sr)
+        self.assertEqual(r.get("_stop_body_term"), "forbidden")
+        out = osc.apply_stop_rule(sr, "n", "http://x.onion/", r)
+        self.assertEqual(out["status"], "EXCLUDED")
+        self.assertEqual(out.get("stop_where"), "body")
+        self.assertIsNone(out.get("title"))
+        self.assertNotIn("_stop_body_term", out)   # internal marker not leaked
+
+    def test_stop_body_beats_categories(self):
+        sr = osc.StopRule()
+        sr.terms = [_re_topic.compile("forbidden", _re_topic.IGNORECASE)]
+        lex = self._lex("market | \\bmarket\\b")
+        html = "<html><title>Shop</title><body>market of forbidden goods</body></html>"
+        r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, categories=lex, stop=sr)
+        self.assertNotIn("categories", r)   # nothing kept from a page that trips the stop rule
+        self.assertEqual(r.get("_stop_body_term"), "forbidden")

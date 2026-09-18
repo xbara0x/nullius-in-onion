@@ -1,0 +1,51 @@
+# Topic lexicon for nullius --categories.
+# Format: one tag per line, "tag | regex".
+# The text after the FIRST "|" is a single case-insensitive regex, so it may use
+# "|" for alternation. A page gets the tag if the regex matches its text.
+# Repeated tag names add more regexes. Only the tag NAMES are ever recorded —
+# never a fragment of the page. Edit this vocabulary for your own triage.
+
+# --- structure / access ---
+login          | \blog[\s-]?in\b|\bsign[\s-]?in\b|\busername\b|\bpassword\b
+register       | \bregister\b|\bsign[\s-]?up\b|\bregistration\b|create .{0,3}account
+captcha        | \bcaptcha\b|not a robot|ddos[\s-]?guard|anti[\s-]?ddos|checking your browser|\bcloudflare\b
+pgp            | \bpgp\b|\bgpg\b|public key|\bfingerprint\b|-{2,}begin pgp
+mirror-warning | \bmirror(s)?\b|\bphishing\b|\bphishy\b|official .{0,12}(link|url|address)|verify .{0,12}(url|address|link)
+
+# --- commerce / crypto ---
+marketplace    | \bmarket(place)?\b|\bvendor(s)?\b|add to cart|\bcheckout\b|\bproduct(s)?\b|\blisting(s)?\b|\bescrow\b|\bstorefront\b|\bshop\b|\bfor sale\b
+crypto         | \bbitcoin\b|\bbtc\b|\bmonero\b|\bxmr\b|\bwallet\b|\blitecoin\b|\bethereum\b|\blightning\b
+mixer          | \bmixer\b|\btumbler\b|coin[\s-]?join|\blaunder|mixing service
+exchange       | \bexchange\b|\bcashout\b|swap .{0,8}(coin|crypto|btc|xmr)
+
+# --- communities / content ---
+forum          | \bforum(s)?\b|\bmessage board\b|\bthread(s)?\b|new topic|\bsubforum\b|post reply|\bmembers?\b
+imageboard     | \bimageboard\b|\bchan\b|greentext
+wiki           | \bwiki\b|hidden wiki
+directory      | \bdirectory\b|\bcatalog(ue)?\b|link list|onion link(s)?|working links|trusted links
+search-engine  | \bsearch engine\b|\bindexed\b|\bcrawler\b|search the (dark|deep|tor) ?web
+paste          | \bpaste ?bin\b|\bpastebin\b|\bsnippet\b
+hosting        | \bhosting\b|\bvps\b|\buploader\b|file browser|\bfile ?(share|upload|host)\b|image host
+email          | \be-?mail\b|\bwebmail\b|\bmailbox\b|\bsmtp\b|\bimap\b|\binbox\b
+chat           | \bchat\b|\bmessenger\b|\bxmpp\b|\bjabber\b|\birc\b|\bmatrix\b
+blog-news      | \bblog\b|\bnews\b|\barticle(s)?\b|\bmagazine\b|\beditorial\b|\bжурнал\b
+library        | \blibrary\b|\be-?books?\b|z-?library|\baudiobook|\bcomics\b
+social         | \bsocial network\b|\bfollowers?\b|\btimeline\b|\bprofile\b
+nostr-infra    | \bnostr\b|\brelay\b|\bstrfry\b|\bmeshtastic\b|\bnpub1\b|\boutbox\b
+
+# --- illicit / high CTI signal ---
+drugs          | \bcannabis\b|\bcocaine\b|\bmdma\b|\bheroin\b|\blsd\b|\bketamine\b|\bpsychedelic|\bpills?\b|\bnarcotic|\bweed\b|\bamphetamine
+pharmacy       | \bpharmacy\b|\bprescription\b|\bxanax\b|\bfentanyl\b|\bopioid
+weapons        | \bweapon(s)?\b|\bfirearm(s)?\b|\bhandgun\b|\bpistol\b|\bammunition\b|\bglock\b|\bak-?47\b
+carding        | \bcarding\b|\bcvv\b|\bfullz\b|cloned card|\btrack ?[12]\b|dumps .{0,8}(pin|track)
+fraud          | \bpaypal\b|western union|money ?gram|\bcashapp\b|wire transfer|\bskimmer\b|bank ?(log|drop|transfer)
+counterfeit    | \bcounterfeit\b|\bpassport(s)?\b|id card(s)?|\breplica\b|fake .{0,10}(money|note|bill|passport|id|document)|driver'?s? licen[cs]e
+hacking        | \bhack(ing|er|s)?\b|\bexploit(s)?\b|\bmalware\b|\bransomware\b|\bbotnet\b|\bkeylogger\b|\bstealer\b|\b0[\s-]?day\b|remote access trojan|phishing kit
+data-leak      | \bleak(s|ed)?\b|\bbreach(es|ed)?\b|database dump|\bcombo ?list\b|stealer logs?|\bcredential(s)?\b
+gambling       | \bcasino\b|\bgambl|\bbetting\b|\bpoker\b|\broulette\b|\blottery\b
+adult          | \bporn\b|\bxxx\b|\bescort(s)?\b|cam ?girl|adult content
+whistleblowing | \bsecuredrop\b|\bwhistleblow|\bjournalist|leak .{0,8}documents
+privacy-tool   | \bvpn\b|\bencrypt(ion|ed)?\b|\banonymity\b|no logs|\btails\b
+gift-cards     | gift ?card|\bvoucher(s)?\b
+software-warez | \bcrack(ed|s)?\b|\bwarez\b|\bkeygen\b|\bnulled\b|license key|\btorrent\b
+bounty         | \bbounty\b|\bbounties\b|\breward\b .{0,10}(btc|bitcoin|xmr)
