@@ -689,17 +689,19 @@ class Batch(unittest.TestCase):
         self.assertFalse(s.is_excluded("http://shortyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.onion/"))
 
     def test_stop_rule_terms_match_and_exclude_writes_the_file(self):
-        terms = self.d / "terms.txt"; terms.write_text("# mine\n\\bforbidden\\b\nred\\s?room\n")
+        terms = self.d / "terms.txt"
+        terms.write_text("# mine\nabuse | \\bforbidden\\b\ngore | red\\s?room\nplain\\s?bare\n")
         ex = self.d / "ex.txt"
         s = osc.StopRule(terms, ex)
         self.assertEqual(s.match("nothing here"), None)
-        self.assertEqual(s.match(None, "A Forbidden Thing"), "forbidden")
-        self.assertEqual(s.match("RedRoom live"), "redroom")
+        self.assertEqual(s.match(None, "A Forbidden Thing"), "abuse")   # named -> the name, never the page span
+        self.assertEqual(s.match("RedRoom live"), "gore")
+        self.assertEqual(s.match("a plainbare word"), "plain\\s?bare")  # bare -> the pattern text, still not the page
         self.assertEqual(s.match("unforbidden"), None)       # whole word only, as the term says
-        s.exclude(self.ONION, "forbidden", "title")
+        s.exclude(self.ONION, "abuse", "title")
         line = ex.read_text().strip()
         self.assertTrue(line.startswith("a" * 56 + ".onion\t"))
-        self.assertIn("\tterm:forbidden\twhere:title", line)
+        self.assertIn("\tterm:abuse\twhere:title", line)
         self.assertTrue(s.is_excluded(self.ONION))           # remembered in memory too
 
     def test_apply_stop_rule_scrubs_the_record(self):
@@ -713,8 +715,12 @@ class Batch(unittest.TestCase):
         self.assertNotIn("static_hints", out); self.assertIsNone(out["title"]); self.assertNotIn("http_code_x", out)
         self.assertEqual(set(out), {"name", "uri", "checked_at", "status", "status_detail", "http_code", "title",
                                     "stop_term", "stop_where"})
-        clean = self.online("B", self.ONION2, title="Fine")
-        self.assertIs(osc.apply_stop_rule(s, "B", self.ONION2, clean), clean)
+        clean = self.online("B", self.ONION2, title="Fine",
+                            static_hints={"meta_title": "", "meta_description": "harmless prose", "api_hints": ["/api"]})
+        out2 = osc.apply_stop_rule(s, "B", self.ONION2, clean)
+        self.assertIs(out2, clean)                                    # same record, not excluded
+        self.assertNotIn("meta_description", out2["static_hints"])    # free prose scrubbed even when kept
+        self.assertIn("api_hints", out2["static_hints"])             # technical hints stay
 
     def test_stop_rule_in_a_run_label_title_and_exclusions_file(self):
         terms = self.d / "terms.txt"; terms.write_text("forbidden\n")
@@ -1433,21 +1439,42 @@ class TopicTags(unittest.TestCase):
 
     def test_stop_term_in_body_excludes(self):
         sr = osc.StopRule()
-        sr.terms = [_re_topic.compile("forbidden", _re_topic.IGNORECASE)]
+        sr.terms = [("bodyrule", _re_topic.compile("forbidden", _re_topic.IGNORECASE))]
         html = "<html><head><title>Clean Title</title></head><body>a forbidden word</body></html>"
         r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, stop=sr)
-        self.assertEqual(r.get("_stop_body_term"), "forbidden")
+        self.assertEqual(r.get("_stop_body_term"), "bodyrule")   # the rule NAME, not the page span
         out = osc.apply_stop_rule(sr, "n", "http://x.onion/", r)
         self.assertEqual(out["status"], "EXCLUDED")
-        self.assertEqual(out.get("stop_where"), "body")
+        self.assertEqual((out.get("stop_term"), out.get("stop_where")), ("bodyrule", "body"))
         self.assertIsNone(out.get("title"))
         self.assertNotIn("_stop_body_term", out)   # internal marker not leaked
 
+    def test_body_is_never_persisted_canary(self):
+        # A unique canary in every field a leak could ride. None may survive into
+        # any serialized artifact — the central promise, forced by the test.
+        html = ("<html><head><title>CANARYTITLE</title>"
+                "<meta name='description' content='CANARYMETA describes the page'>"
+                "</head><body>CANARYBODY zzz forbidden marker</body></html>")
+        lex = self._lex("x | \\bnope\\b")                            # a lexicon so the body is read
+        sr = osc.StopRule(); sr.terms = [("abuse", _re_topic.compile("forbidden", _re_topic.IGNORECASE))]
+        r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, categories=lex, stop=sr)
+        out = osc.apply_stop_rule(sr, "n", "http://x.onion/", r)
+        blob = json.dumps(out)
+        for canary in ("CANARYTITLE", "CANARYMETA", "CANARYBODY"):
+            self.assertNotIn(canary, blob)                            # no span of the page in the record
+        self.assertEqual(out["stop_term"], "abuse")                  # the rule name, not the matched text
+        # NOT excluded: meta_description (free prose) must still be scrubbed
+        html2 = ("<html><head><title>Loading...</title>"
+                 "<meta name='description' content='CANARYMETA2'></head><body>ok</body></html>")
+        r2 = osc.check_one("n", "http://x.onion/", self._session(html2), self.cfg)
+        out2 = osc.apply_stop_rule(osc.StopRule(), "n", "http://x.onion/", r2)
+        self.assertNotIn("CANARYMETA2", json.dumps(out2))
+
     def test_stop_body_beats_categories(self):
         sr = osc.StopRule()
-        sr.terms = [_re_topic.compile("forbidden", _re_topic.IGNORECASE)]
+        sr.terms = [("bodyrule", _re_topic.compile("forbidden", _re_topic.IGNORECASE))]
         lex = self._lex("market | \\bmarket\\b")
         html = "<html><title>Shop</title><body>market of forbidden goods</body></html>"
         r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, categories=lex, stop=sr)
         self.assertNotIn("categories", r)   # nothing kept from a page that trips the stop rule
-        self.assertEqual(r.get("_stop_body_term"), "forbidden")
+        self.assertEqual(r.get("_stop_body_term"), "bodyrule")

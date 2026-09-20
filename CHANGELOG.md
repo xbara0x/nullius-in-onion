@@ -7,7 +7,7 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
-## [0.9.0] — 2026-09-18
+## [0.9.0] — 2026-09-20
 
 ### Added
 - **`--categories FILE` — topic tags for the page already fetched.** A
@@ -24,6 +24,10 @@ bump may change the JSON layout and says so under **Changed**.
   `EXCLUDED (stop term in body)` and, as before, nothing about the page is
   kept. This closes the gap where a page with a clean title and meta but a
   stop term in its body would have been tagged instead of excluded.
+- **`SECURITY.md`** — how to report a vulnerability privately, the supported
+  versions, and a consolidated threat model: the "read once, keep nothing that
+  describes the page" guarantees, why `verify=False` is deliberate, and that
+  `--stop-terms`/`--categories` files are trusted code (ReDoS surface).
 
 ### Fixed
 - **A dead control no longer blocks every run.** The default circuit-check
@@ -31,6 +35,19 @@ bump may change the JSON layout and says so under **Changed**.
   answered, so the start checkpoint read "circuit suspect" and refused to
   measure even on a healthy circuit. Replaced with the BBC News onion
   (`bbcnewsd73hkzno2ini43t4gblxvycyac5aw4gnv7t2rccijh7745uqd.onion`).
+
+### Security
+- **The stop rule no longer records a span of the page.** A match used to keep
+  the matched text (`m.group(0)`) in the results and the exclusions file — a
+  fragment of a page that, by definition, must not be looked at. Stop terms now
+  take an optional name (`"name | regex"` per line, like `--categories`; a bare
+  regex names itself) and a hit records the **rule name**, never page text. Old
+  one-regex-per-line files keep working.
+- **`meta description` is no longer serialized.** It was read for the stop check
+  and then written into `static_hints` in the JSON — free prose from the page
+  (`og:description`) that on an abusive site could describe the content. It is
+  now used for the check and dropped. A canary test fails if any span of a page
+  reaches a persisted artifact.
 
 ## [0.8.0] — 2026-09-15
 
@@ -358,7 +375,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.5.0...v0.6.0

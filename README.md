@@ -22,8 +22,9 @@ It never runs JavaScript, never logs in, never crawls, and never decides for
 you: it reports, with the reasons, and tells you when its own measurement
 cannot be trusted.
 
-**Status:** v0.8.0 — working and tested; the JSON layout may still change,
-and [`CHANGELOG.md`](CHANGELOG.md) says when it does.
+**Status:** working and tested; while the major is `0` the JSON layout may
+still change, and [`CHANGELOG.md`](CHANGELOG.md) says when it does — and what
+the current version is.
 
 <p align="center">
   <img src="docs/demo.gif" alt="nullius running on the example list: three index sources load, five targets are measured, four are listed by dark.fail / tor.taxi / ahmia, controls 3/3" width="880">
@@ -484,16 +485,17 @@ so a relaunch redoes exactly that segment and nothing else. Without a
 journal the whole list would be redone; that is the reason to use both.
 
 **`--stop-terms FILE` and `--exclusions FILE` — stop on what you do not
-want to read.** The terms are yours, one regular expression per line,
-case-insensitive; the tool ships none, because what must not be looked at
-is a matter of your jurisdiction and your policy, not of a default list. A
-target whose label matches is never fetched. A target whose title matches —
-or, when the title was a placeholder, whose `og:title`/`meta description`
-matches — is recorded as `EXCLUDED` with the term and where it appeared,
-and **nothing else**: no title, no hints, no body was ever written
-anywhere. The address goes to the exclusions file, and every later run that
-reads the file skips it without a request. The point of the rule is that a
-page like that is read once, by a program, and never again by anyone.
+want to read.** The terms are yours — `"name | regex"` per line (or a bare
+regex that names itself), case-insensitive; the tool ships none, because
+what must not be looked at is a matter of your jurisdiction and your policy,
+not of a default list. A target whose label matches is never fetched. A
+target whose title matches — or, when the title was a placeholder, whose
+`og:title`/`meta description` matches — is recorded as `EXCLUDED` with the
+**rule name** (never a span of the page) and where it appeared, and
+**nothing else**: no title, no hints, no body was ever written anywhere. The
+address goes to the exclusions file, and every later run that reads the file
+skips it without a request. The point of the rule is that a page like that
+is read once, by a program, and never again by anyone.
 
 The exclusions file is plain text — `<host> <date> term:<term>
 where:<label|title|meta>`, `#` comments — and a Markdown table with the
@@ -589,7 +591,7 @@ anything, is yours.
 | `--diff-previous` | off | after the run, compare with the most recent earlier run of the same list in `--out-dir`; writes `<base>-diff.json` |
 | `--journal FILE` | — | append every record as measured; relaunch skips what is there |
 | `--controls-every N` | 0 | controls at the start, after every N targets and at the end; a failed checkpoint stops the run |
-| `--stop-terms FILE` | — | one regex per line; a matching label, title or meta text makes the target `EXCLUDED` |
+| `--stop-terms FILE` | — | `"name \| regex"` (or bare regex) per line; a matching label, title or meta text makes the target `EXCLUDED`, recording the rule name |
 | `--exclusions FILE` | — | do-not-fetch list, read before the run and appended on every exclusion |
 | `--categories FILE` | — | topic tags for each ONLINE page from a "tag then regex" lexicon; only tag names are kept, never page text |
 | `--descriptor` | off | for every OFFLINE `.onion`, ask the Tor control port whether its descriptor is published (needs `stem`) |

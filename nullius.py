@@ -1680,15 +1680,24 @@ class StopRule:
     MIN_PREFIX = 16
 
     def __init__(self, terms_path: Path | None = None, exclusions_path: Path | None = None):
-        self.terms: list[re.Pattern] = []
+        self.terms: list[tuple[str, re.Pattern]] = []
         self.exclusions_path = exclusions_path
         self.onion_prefixes: list[str] = []
         self.hosts: set[str] = set()
         if terms_path is not None:
             for line in terms_path.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
-                if line and not line.startswith("#"):
-                    self.terms.append(re.compile(line, re.IGNORECASE))
+                if not line or line.startswith("#"):
+                    continue
+                # "name | regex" (like --categories) records the NAME on a hit;
+                # a bare regex names itself with its own pattern text. Either way
+                # what is recorded is the rule, never a span of the page.
+                rule, sep, expr = line.partition("|")
+                rule, expr = rule.strip(), expr.strip()
+                if sep and expr:
+                    self.terms.append((rule, re.compile(expr, re.IGNORECASE)))
+                else:
+                    self.terms.append((line, re.compile(line, re.IGNORECASE)))
         if exclusions_path is not None and exclusions_path.is_file():
             for line in exclusions_path.read_text(encoding="utf-8").splitlines():
                 self._remember(self._first_cell(line))
@@ -1726,13 +1735,15 @@ class StopRule:
         return any(label.startswith(pfx) for pfx in self.onion_prefixes)
 
     def match(self, *texts: str | None) -> str | None:
+        """Return the NAME of the first rule that matches — never a span of the
+        page. A stop term firing on hostile content must leak nothing into the
+        record, so the caller records which rule fired, not what it matched."""
         for text in texts:
             if not text:
                 continue
-            for pat in self.terms:
-                m = pat.search(text)
-                if m:
-                    return m.group(0).lower()
+            for rule, pat in self.terms:
+                if pat.search(text):
+                    return rule
         return None
 
     def exclude(self, uri: str, term: str, where: str) -> None:
@@ -1770,6 +1781,9 @@ def apply_stop_rule(stop: StopRule, name: str, uri: str, r: dict) -> dict:
         if term:
             stop.exclude(uri, term, where)
             return excluded_record(name, uri, f"EXCLUDED (stop term in {where})", term, where)
+    # meta_description is free prose from the page (og:description): read for the
+    # meta check above, never persisted — the record must not describe the page.
+    hints.pop("meta_description", None)
     return r
 
 
@@ -1842,8 +1856,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "a failed checkpoint stops the run and discards the segment since the last good one "
                         "(default: controls at the end only)")
     b.add_argument("--stop-terms", type=Path, metavar="FILE",
-                   help="one regular expression per line, case-insensitive; a label, title or meta text "
-                        "that matches makes the target EXCLUDED — nothing about the page is kept")
+                   help='"name | regex" (or a bare regex) per line, case-insensitive; a label, title or '
+                        "meta text that matches makes the target EXCLUDED, recording the rule name — never "
+                        "a span of the page")
     b.add_argument("--exclusions", type=Path, metavar="FILE",
                    help="persisted do-not-fetch list: read before the run, appended on every exclusion "
                         "(<host> <date> term:<term> where:<label|title|meta>)")
