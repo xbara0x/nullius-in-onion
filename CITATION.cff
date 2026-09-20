@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it."
+title: "Nullius in Onion"
+abstract: >-
+  A command-line tool to triage lists of .onion and clearnet services: is it up,
+  who already lists it, and what changed since last time — one plain request per
+  target over Tor, with the reasons and the caveats, keeping nothing that
+  describes the page.
+type: software
+authors:
+  - alias: xbara0x
+    email: xbara0x@pm.me
+repository-code: "https://github.com/xbara0x/nullius-in-onion"
+url: "https://github.com/xbara0x/nullius-in-onion"
+license: MIT
+version: 0.10.0
+keywords:
+  - tor
+  - onion
+  - dark-web
+  - osint
+  - threat-intelligence
+  - liveness-check

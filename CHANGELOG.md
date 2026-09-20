@@ -7,6 +7,38 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-20
+
+### Added
+- **`warning` kind — an inverted-semantics index.** A source of known-bad
+  addresses (phishing clones, scam mirrors): an exact hit is surfaced as
+  `flagged` / `flagged_by` — an alert at the top of the run and in red in the
+  report — and does **not** count as corroboration (`listed_in`). Add one with
+  `--indices`/`--catalog` and kind `warning`; it reuses the whole index
+  pipeline. Warning lists go stale fast (clones move), so keep them fresh.
+- **A quality gate in CI** — a `quality` job running `ruff` (pyflakes, bugbear,
+  isort) for real-bug lint, `mypy` (type check) and `coverage`, plus a `dev`
+  extra that installs them. The type hints the module already carried are now
+  enforced; the offline suite reports ~91% line coverage. The formatter is not
+  imposed — the project's own layout is left as it is.
+- `CITATION.cff` (the tool itself cites research datasets) and a PR template
+  encoding the CONTRIBUTING checklist; a Contents table for the long README.
+
+### Fixed
+- Small issues the linters surfaced, none behaviour-changing: a dead local, a
+  `raise ... from exc`, page-attribute values coerced to `str` before use, and
+  `zip(..., strict=False)`. The unit CI job installs the package itself instead
+  of `requirements.txt`; the package job exercises the `[descriptor]` extra.
+
+### Security
+- **User regexes now fail safe under a deadline.** `--stop-terms` and
+  `--categories` patterns run, single-threaded, against up to ~200 KB of
+  adversary-controlled page text; a catastrophic pattern could hang the scan.
+  With the new `hardened` extra (`pip install .[hardened]`, the `regex` module)
+  each match is bounded by a 2 s deadline and a pattern that blows it is treated
+  as no match, with a one-time warning. Without the extra, the size cap and the
+  trusted-code note in `SECURITY.md` remain the mitigation.
+
 ## [0.9.0] — 2026-09-20
 
 ### Added
@@ -375,7 +407,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.6.0...v0.7.0

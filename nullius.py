@@ -73,8 +73,8 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from html import unescape as html_unescape
+from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
 import requests
@@ -86,7 +86,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.9.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.10.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -131,6 +131,55 @@ SPA_STATE_MARKERS = ["__NEXT_DATA__", "__NUXT__", "__INITIAL_STATE__", "applicat
 MAX_HINTS = 10
 
 CURL_MARKER = "__CURL_META__"
+
+
+# --------------------------------------------------------------------------- #
+# User-supplied regexes, run against hostile page text
+# --------------------------------------------------------------------------- #
+# The stop-terms and categories files are regexes you run, single-threaded,
+# against up to ~200 KB of adversary-controlled content per page. A pattern with
+# catastrophic backtracking (poisoned, or benign against a crafted body) would
+# hang the whole scan. If the `regex` module is installed (the `hardened` extra),
+# each user pattern is matched under a deadline and a pathological one fails
+# safe; with only the stdlib `re`, the size cap and the "trusted code" note in
+# SECURITY.md are the mitigation.
+try:
+    import regex as _user_re
+
+    _USER_RE_HAS_TIMEOUT = True
+except ImportError:
+    import re as _user_re
+
+    _USER_RE_HAS_TIMEOUT = False
+
+UserPatternError = _user_re.error
+USER_PATTERN_TIMEOUT = 2.0  # seconds one user pattern may spend on one page
+_pattern_timeouts_warned: set[str] = set()
+
+
+def compile_user(expr: str):
+    """Compile a user-supplied regex with the matching engine in use."""
+    return _user_re.compile(expr, _user_re.IGNORECASE)
+
+
+def search_user(pattern, text: str) -> bool:
+    """Search a user pattern against (hostile) text, bounded by a deadline when
+    the `regex` module is installed. A pattern that blows the deadline fails
+    safe — no match, with a one-time warning — instead of hanging the run."""
+    try:
+        if _USER_RE_HAS_TIMEOUT:
+            return pattern.search(text, timeout=USER_PATTERN_TIMEOUT) is not None
+        return pattern.search(text) is not None
+    except TimeoutError:
+        shown = getattr(pattern, "pattern", "?")
+        if shown not in _pattern_timeouts_warned:
+            _pattern_timeouts_warned.add(shown)
+            print(
+                f"  warning: pattern {shown!r} exceeded {USER_PATTERN_TIMEOUT:.0f}s on a page and was "
+                "treated as no match (SECURITY.md: stop-terms/categories are trusted code)",
+                file=sys.stderr,
+            )
+        return False
 
 
 class Config:
@@ -287,6 +336,7 @@ SOURCE_KINDS = {
     "search": "a search engine queried per target with the address — crawler-grade evidence, one request per target",
     "research": "a published measurement dataset; what an entry proves is what the study measured — the card says",
     "self": "your own catalog or bookmarks (--catalog)",
+    "warning": "a list of KNOWN-BAD addresses (phishing clones, scam mirrors); a hit is an ALERT, not corroboration, and goes stale fast",
 }
 UNSPECIFIED_KIND = "unspecified"
 QUERY_PLACEHOLDER = "{query}"  # in a source URL: the source is queried per target instead of downloaded
@@ -364,7 +414,6 @@ class Source:
         engines.discard("")
         hits: list[dict] = []
         onion_hosts: set[str] = set()
-        hit_hosts: set[str] = set()
         text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", html_text)
         text = re.sub(r"\s+", " ", text)  # an anchor's text may span source lines; only block tags delimit here
         text = re.sub(r"(?i)</?(p|br|li|div|h[1-6]|tr|td|th|section|article|cite)\b[^>]*>", "\n", text)
@@ -589,9 +638,15 @@ class Indices:
             l, n = src.lookup(host, candidates)
             listed_in += l
             name_matches += n
+        # A `warning` source lists known clones/scam mirrors: an exact hit is an
+        # ALERT, never corroboration. Split it out before the verdict is formed.
+        flagged_by = [e for e in listed_in if e.get("kind") == "warning"]
+        listed_in = [e for e in listed_in if e.get("kind") != "warning"]
+        name_matches = [e for e in name_matches if e.get("kind") != "warning"]
         verdict = "listed" if listed_in else ("name-match" if name_matches else "unlisted")
         kinds = sorted({e["kind"] for e in listed_in})
-        return {"verdict": verdict, "listed_in": listed_in, "name_matches": name_matches,
+        return {"verdict": verdict, "flagged": bool(flagged_by), "flagged_by": flagged_by,
+                "listed_in": listed_in, "name_matches": name_matches,
                 "listed_kinds": kinds,
                 # Listed, but only by robots (crawler lists, search engines):
                 # reachable once, identity unknown. On a real batch this is
@@ -643,9 +698,9 @@ def looks_like_html(body: str) -> bool:
 def extract_static_hints(html_text: str, soup: BeautifulSoup) -> dict:
     def meta_content(*, prop: str | None = None, name: str | None = None) -> str:
         attrs = {"property": prop} if prop else {"name": name}
-        tag = soup.find("meta", attrs=attrs)
+        tag = soup.find("meta", attrs=attrs)  # type: ignore[arg-type]  # bs4 stub invariance on attrs dict
         content = tag.get("content") if tag else None
-        return content.strip() if content else ""
+        return content.strip() if isinstance(content, str) else ""
 
     meta_title = (
         meta_content(prop="og:title")
@@ -666,8 +721,8 @@ def extract_static_hints(html_text: str, soup: BeautifulSoup) -> dict:
 
     script_srcs: list[str] = []
     for tag in soup.find_all("script", src=True):
-        src = tag["src"]
-        if src not in script_srcs:
+        src = tag.get("src")
+        if isinstance(src, str) and src not in script_srcs:
             script_srcs.append(src)
     script_srcs = script_srcs[:MAX_HINTS]
 
@@ -692,9 +747,9 @@ def visible_text(soup: BeautifulSoup, cap: int = 200_000) -> str:
     parts: list[str] = []
     for attrs in ({"name": "description"}, {"name": "keywords"},
                   {"property": "og:description"}, {"property": "og:title"}):
-        tag = soup.find("meta", attrs=attrs)
+        tag = soup.find("meta", attrs=attrs)  # type: ignore[arg-type]  # bs4 stub invariance on attrs dict
         content = tag.get("content") if tag else None
-        if content:
+        if isinstance(content, str):
             parts.append(content.strip())
     for node in soup.find_all(string=True):
         parent = node.parent.name if node.parent else ""
@@ -724,7 +779,7 @@ class Lexicon:
     def tag(self, text: str) -> list[str]:
         if not text:
             return []
-        return [name for name, pats in self.tags if any(p.search(text) for p in pats)]
+        return [name for name, pats in self.tags if any(search_user(p, text) for p in pats)]
 
 
 def read_categories(path: Path) -> Lexicon:
@@ -744,9 +799,9 @@ def read_categories(path: Path) -> Lexicon:
         if not sep or not name or not expr:
             continue
         try:
-            pat = re.compile(expr, re.IGNORECASE)
-        except re.error as exc:
-            raise ValueError(f"{path}:{lineno}: bad regex {expr!r}: {exc}")
+            pat = compile_user(expr)
+        except UserPatternError as exc:
+            raise ValueError(f"{path}:{lineno}: bad regex {expr!r}: {exc}") from exc
         if name not in by_name:
             by_name[name] = []
             order.append(name)
@@ -837,7 +892,7 @@ def fetch_via_curl(uri: str, cfg: Config) -> Fetched | None:
         uri,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=cfg.timeout + 15)
+        proc = subprocess.run(cmd, capture_output=True, timeout=cfg.timeout + 15, check=False)
     except (subprocess.TimeoutExpired, OSError):
         return None
     out = proc.stdout.decode("utf-8", errors="replace")
@@ -898,7 +953,7 @@ def fetch(uri: str, session: requests.Session, cfg: Config) -> tuple[Fetched, bo
 
 def check_one(name: str, uri: str, session: requests.Session, cfg: Config,
               categories: "Lexicon | None" = None, stop: "StopRule | None" = None) -> dict:
-    result = {
+    result: dict[str, object] = {
         "name": name,
         "uri": uri,
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -1040,6 +1095,7 @@ class DescriptorChecker:
         if not self._connect():
             return "unknown", self.error or "no control connection"
         addr = m.group(1)  # the service address itself; a subdomain (forum.<addr>.onion) is not part of it
+        assert self.ctl is not None  # _connect() returned True above
         self._events.clear()
         try:
             reply = self.ctl.msg(f"HSFETCH {addr}")
@@ -1074,15 +1130,15 @@ class DescriptorChecker:
         evs = mine()  # final snapshot: an answer that landed after the last poll still counts
         if any(ev.action == "RECEIVED" for ev in evs):
             return "published", "descriptor fetched from the HSDirs — the service is announced, whatever it answers"
-        failed = [ev for ev in evs if ev.action == "FAILED"]
-        reasons = sorted({str(getattr(ev, "reason", "") or "?") for ev in failed})
-        if not failed:
+        failed_evs = [ev for ev in evs if ev.action == "FAILED"]
+        reasons = sorted({str(getattr(ev, "reason", "") or "?") for ev in failed_evs})
+        if not failed_evs:
             return "unknown", f"no answer from the HSDirs within {self.timeout:.0f}s"
         if reasons != ["NOT_FOUND"]:
             return "unknown", f"HSDir lookup failed: {', '.join(reasons)}"
         if quiet:
-            return "not_published", f"no descriptor on the HSDirs ({len(failed)} × NOT_FOUND)"
-        return "unknown", f"{len(failed)} × NOT_FOUND, but a lookup was still in progress at the {self.timeout:.0f}s deadline"
+            return "not_published", f"no descriptor on the HSDirs ({len(failed_evs)} × NOT_FOUND)"
+        return "unknown", f"{len(failed_evs)} × NOT_FOUND, but a lookup was still in progress at the {self.timeout:.0f}s deadline"
 
     def close(self) -> None:
         if self.ctl is not None:
@@ -1132,15 +1188,19 @@ def write_html_report(results: list[dict], out_path: Path,
         ix = r.get("indices")
         if not ix:
             return ""
+        flag = ""
+        if ix.get("flagged"):
+            who = ", ".join(sorted({m["source"] for m in ix["flagged_by"]}))
+            flag = f" — <span class='bad'>⚠ flagged by {_esc(who)}</span>"
         if ix["verdict"] == "listed":
             who = " ".join(f"<span class='src'>{_esc(name)}" + (f" <span class='dim'>{_esc(kind)}</span>" if kind != UNSPECIFIED_KIND else "") + "</span>"
                            for name, kind in sorted({(m["source"], m["kind"]) for m in ix["listed_in"]}))
             note = " <span class='warn'>(crawlers only)</span>" if ix.get("crawler_only") else ""
-            return f" — <b>listed by</b> {who}{note}"
+            return flag + f" — <b>listed by</b> {who}{note}"
         if ix["verdict"] == "name-match":
             names = ", ".join(f"<span class='src'>{_esc(m['source'])}</span> {_esc(m['name'])}" for m in ix["name_matches"][:3])
-            return f" — <b>name-match</b> {names}"
-        return " — <span class='dim'>unlisted</span>"
+            return flag + f" — <b>name-match</b> {names}"
+        return flag + " — <span class='dim'>unlisted</span>"
 
     lines.append(f"<h1>Online, title resolved ({len(resolved)})</h1><ol>")
     for r in resolved:
@@ -1299,7 +1359,7 @@ def diff_runs(old: dict, new: dict) -> dict:
             continue
         changes = []
         if n["status"] == "ONLINE":
-            for (field, ov), (_, nv) in zip(_online_fields(o), _online_fields(n)):
+            for (field, ov), (_, nv) in zip(_online_fields(o), _online_fields(n), strict=False):
                 if ov != nv:
                     changes.append({"field": field, "old": ov, "new": nv})
         elif n["status"] == "OFFLINE":
@@ -1459,17 +1519,19 @@ def probe_search_source(src: "Source", session: requests.Session, cfg: "Config")
     index knows — except itself, which it cannot list. Returns found, total,
     distinct onion hosts seen in the answers, and the failures by probe."""
     probes = [h for h in PROBE_HOSTS if h != host_of(src.origin)]
-    out = {"found": 0, "total": len(probes), "hosts": 0, "failures": []}
+    found = 0
+    hosts = 0
+    failures: list[str] = []
     for i, host in enumerate(probes):
         if i:
             time.sleep(random.uniform(*cfg.delay))  # after every probe, answered or not
         hits, failure, seen = src.query(host, session, cfg)
         if failure:
-            out["failures"].append(failure)
+            failures.append(failure)
             continue
-        out["found"] += bool(hits)
-        out["hosts"] = max(out["hosts"], seen)
-    return out
+        found += bool(hits)
+        hosts = max(hosts, seen)
+    return {"found": found, "total": len(probes), "hosts": hosts, "failures": failures}
 
 
 def source_status(src: "Source", last: dict | None, probe: dict | None = None) -> tuple[str, str]:
@@ -1695,9 +1757,9 @@ class StopRule:
                 rule, sep, expr = line.partition("|")
                 rule, expr = rule.strip(), expr.strip()
                 if sep and expr:
-                    self.terms.append((rule, re.compile(expr, re.IGNORECASE)))
+                    self.terms.append((rule, compile_user(expr)))
                 else:
-                    self.terms.append((line, re.compile(line, re.IGNORECASE)))
+                    self.terms.append((line, compile_user(line)))
         if exclusions_path is not None and exclusions_path.is_file():
             for line in exclusions_path.read_text(encoding="utf-8").splitlines():
                 self._remember(self._first_cell(line))
@@ -1742,7 +1804,7 @@ class StopRule:
             if not text:
                 continue
             for rule, pat in self.terms:
-                if pat.search(text):
+                if search_user(pat, text):
                     return rule
         return None
 
@@ -1889,6 +1951,12 @@ def print_indices_summary(indices: "Indices", results: list[dict]) -> None:
     print(f"Indices: {counts['listed']} listed, {counts['name-match']} name-match, "
           f"{counts['unlisted']} unlisted."
           + (f" Of the listed, {crawler_only} only by crawlers." if crawler_only else ""), file=sys.stderr)
+    flagged = [r for r in results if r["indices"].get("flagged")]
+    if flagged:
+        print(f"  ⚠ {len(flagged)} flagged as a clone/scam by a warning source:", file=sys.stderr)
+        for r in flagged:
+            who = ", ".join(sorted({m["source"] for m in r["indices"]["flagged_by"]}))
+            print(f"      {r['uri']} — {who}", file=sys.stderr)
     for r in results:
         ix = r["indices"]
         if ix["verdict"] == "listed":
@@ -2112,8 +2180,9 @@ def main(argv: list[str] | None = None) -> int:
         descriptors.close()
         dcount = {"published": 0, "not_published": 0, "unknown": 0}
         for r in offline:
-            if r.get("descriptor") in dcount:
-                dcount[r["descriptor"]] += 1
+            dkey = r.get("descriptor")
+            if isinstance(dkey, str) and dkey in dcount:
+                dcount[dkey] += 1
         if any(dcount.values()):
             print(f"Descriptors of the offline: {dcount['published']} published (down, not gone), "
                   f"{dcount['not_published']} not published (gone at the Tor layer), {dcount['unknown']} unknown.", file=sys.stderr)

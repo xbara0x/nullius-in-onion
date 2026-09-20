@@ -65,8 +65,11 @@ What the tool promises, so you know what a violation looks like:
 - **`--stop-terms` and `--categories` files are trusted code.** They are regular
   expressions you run, single-threaded, against up to ~200 KB of
   adversary-controlled text per page. Treat these files as code you wrote or
-  audited — a poisoned vocabulary can hang a scan (see ReDoS above). The tool
-  ships neither by default.
+  audited — a poisoned vocabulary can hang a scan (see ReDoS above). Installing
+  the `hardened` extra (`pip install nullius-in-onion[hardened]`, the `regex`
+  module) bounds each match with a deadline, so a pathological pattern fails
+  safe instead of hanging; without it, the size cap and this note are the
+  mitigation. The tool ships neither file by default.
 - **OPSEC boundary.** Onion targets never leave Tor. Clearnet targets are
   fetched **through the Tor exit node**, so the target's operator sees a Tor
   exit, not your address — but the tool anonymizes you no further than routing

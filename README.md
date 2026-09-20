@@ -34,6 +34,19 @@ the current version is.
 
 ---
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Reading a result](#reading-a-result)
+- [Why a naive checker lies](#why-a-naive-checker-lies)
+- [Who lists it — index cross-check](#who-lists-it--index-cross-check)
+- [What changed since last time — diff](#what-changed-since-last-time--diff)
+- [Down, or gone? — the descriptor check](#down-or-gone--the-descriptor-check)
+- [Long lists — journal, checkpoints, stop rule](#long-lists--journal-checkpoints-stop-rule)
+- [What it will never do](#what-it-will-never-do)
+- [What this is not](#what-this-is-not)
+- [Reference](#reference)
+
 ## Quick start
 
 You need a running Tor daemon (SOCKS5 on `127.0.0.1:9050` — on Debian or
@@ -173,6 +186,7 @@ the source is, who runs it, how it decides what to list, and therefore what
 | `search` | a search engine **queried per target** with the address — crawler-grade evidence | OnionLand Search |
 | `research` | a published measurement dataset; what an entry proves is what the study measured — the card says | KAU's Onion-Location measurements, onionsec.csv |
 | `self` | your own catalog or bookmarks | whatever you pass with `--catalog` |
+| `warning` | a list of **known-bad** addresses (clones, scam mirrors) — a hit is an **alert**, not corroboration | add your own; it goes stale fast |
 
 The registry is the part of this project that grows by contribution: one
 line and one card per source, by pull request. The bar — an index enumerates
@@ -236,6 +250,10 @@ Each record gains an `indices` block with a verdict and the evidence:
 | `listed` | the exact host is in at least one source — `listed_in` says which (source, kind, line); `listed_kinds` summarizes the kinds |
 | `name-match` | the host is not, but an entry with the same name is — `name_matches` says which. Mirror or clone? **That decision is yours.** |
 | `unlisted` | neither — and only meaningful if `sources_failed` is empty |
+
+Independently of the verdict, **`flagged`** (with `flagged_by`) is set when the
+address is on a `warning` source — a clone or scam-mirror list. A flag is an
+alert: shown in red and at the top of the run, and it never counts as `listed`.
 
 **Two things to keep in mind.** *Listed* means different things for different
 kinds: `listed by tor.taxi (curated)` is an identity claim; `listed by ahmia

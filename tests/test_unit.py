@@ -14,6 +14,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -1370,7 +1371,6 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
-import re as _re_topic  # noqa: E402  (module already imported above; alias for the topic tests)
 
 
 class TopicTags(unittest.TestCase):
@@ -1439,7 +1439,7 @@ class TopicTags(unittest.TestCase):
 
     def test_stop_term_in_body_excludes(self):
         sr = osc.StopRule()
-        sr.terms = [("bodyrule", _re_topic.compile("forbidden", _re_topic.IGNORECASE))]
+        sr.terms = [("bodyrule", osc.compile_user("forbidden"))]
         html = "<html><head><title>Clean Title</title></head><body>a forbidden word</body></html>"
         r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, stop=sr)
         self.assertEqual(r.get("_stop_body_term"), "bodyrule")   # the rule NAME, not the page span
@@ -1456,7 +1456,7 @@ class TopicTags(unittest.TestCase):
                 "<meta name='description' content='CANARYMETA describes the page'>"
                 "</head><body>CANARYBODY zzz forbidden marker</body></html>")
         lex = self._lex("x | \\bnope\\b")                            # a lexicon so the body is read
-        sr = osc.StopRule(); sr.terms = [("abuse", _re_topic.compile("forbidden", _re_topic.IGNORECASE))]
+        sr = osc.StopRule(); sr.terms = [("abuse", osc.compile_user("forbidden"))]
         r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, categories=lex, stop=sr)
         out = osc.apply_stop_rule(sr, "n", "http://x.onion/", r)
         blob = json.dumps(out)
@@ -1472,9 +1472,54 @@ class TopicTags(unittest.TestCase):
 
     def test_stop_body_beats_categories(self):
         sr = osc.StopRule()
-        sr.terms = [("bodyrule", _re_topic.compile("forbidden", _re_topic.IGNORECASE))]
+        sr.terms = [("bodyrule", osc.compile_user("forbidden"))]
         lex = self._lex("market | \\bmarket\\b")
         html = "<html><title>Shop</title><body>market of forbidden goods</body></html>"
         r = osc.check_one("n", "http://x.onion/", self._session(html), self.cfg, categories=lex, stop=sr)
         self.assertNotIn("categories", r)   # nothing kept from a page that trips the stop rule
         self.assertEqual(r.get("_stop_body_term"), "bodyrule")
+
+
+class UserPatternTimeout(unittest.TestCase):
+    """User regexes (stop-terms / categories) run against hostile page text.
+    They fail safe under a deadline when the `regex` module is installed."""
+
+    def test_search_user_matches_and_misses(self):
+        p = osc.compile_user(r"\bmarket\b")
+        self.assertTrue(osc.search_user(p, "a market here"))
+        self.assertFalse(osc.search_user(p, "nothing to see"))
+
+    @unittest.skipUnless(osc._USER_RE_HAS_TIMEOUT, "needs the regex module for a matching deadline")
+    def test_catastrophic_pattern_does_not_hang(self):
+        p = osc.compile_user(r"(a+)+$")
+        evil = "a" * 40 + "!"
+        t0 = time.monotonic()
+        self.assertFalse(osc.search_user(p, evil))          # deadline -> no match, not a hang
+        self.assertLess(time.monotonic() - t0, osc.USER_PATTERN_TIMEOUT + 5)
+
+
+class WarningKind(unittest.TestCase):
+    """A `warning` source (clone / scam-mirror list) flags a target; it never
+    corroborates it."""
+
+    def _warn(self, host, name="Clone of X"):
+        w = osc.Source("Phishy", "x", "warning")
+        w._add(name, host, "test", 1, set())
+        return w
+
+    def test_exact_hit_flags_and_does_not_list(self):
+        host = "a" * 56 + ".onion"
+        r = osc.Indices([self._warn(host)]).lookup("http://" + host + "/")
+        self.assertTrue(r["flagged"])
+        self.assertEqual(r["flagged_by"][0]["source"], "Phishy")
+        self.assertEqual(r["verdict"], "unlisted")   # a warning hit is not corroboration
+        self.assertEqual(r["listed_in"], [])
+
+    def test_flag_and_real_listing_coexist(self):
+        host = "b" * 56 + ".onion"
+        real = osc.Source("dark.fail", "x", "curated")
+        real._add("Real X", host, "test", 1, set())
+        r = osc.Indices([real, self._warn(host)]).lookup("http://" + host + "/")
+        self.assertTrue(r["flagged"])                # the alert still shows
+        self.assertEqual(r["verdict"], "listed")     # and the real corroboration stands
+        self.assertEqual([e["kind"] for e in r["listed_in"]], ["curated"])

@@ -30,6 +30,10 @@ dependencies = [
 [project.optional-dependencies]
 # --descriptor: ask the Tor control port whether an offline onion is still published
 descriptor = ["stem>=1.8"]
+# a matching deadline for user regexes against hostile page text (ReDoS guard)
+hardened = ["regex>=2024.5.15"]
+# the CI safety net: lint, type-check, coverage (plus regex, to exercise the guard)
+dev = ["ruff>=0.6", "mypy>=1.10", "coverage>=7.0", "types-requests", "regex>=2024.5.15"]
 
 [project.urls]
 Homepage = "https://github.com/xbara0x/nullius-in-onion"
@@ -44,6 +48,29 @@ py-modules = ["nullius"]
 # The registry travels with an installed copy too: nullius looks for it under
 # sys.prefix/share/nullius when there is no indices/ next to the module.
 data-files = { "share/nullius" = ["indices/sources.txt", "indices/sources-health.json"] }
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# A safety net, not a style: pyflakes (real errors), bugbear (real bugs), isort.
+# The project's own formatting is deliberate and is left as it is.
+select = ["F", "B", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["nullius.py"]
+ignore_missing_imports = true   # requests untyped here; stem/regex are optional imports
+warn_unused_ignores = true
+
+[tool.coverage.run]
+# tests load nullius.py by path (as module "osc"), so match the file, not an import name
+include = ["nullius.py"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = ["if __name__ == .__main__.:"]
 
 [tool.setuptools.dynamic]
 version = { attr = "nullius.__version__" }
