@@ -13,7 +13,7 @@ authors:
 repository-code: "https://github.com/xbara0x/nullius-in-onion"
 url: "https://github.com/xbara0x/nullius-in-onion"
 license: MIT
-version: 0.10.0
+version: 0.11.0
 keywords:
   - tor
   - onion

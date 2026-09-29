@@ -705,6 +705,244 @@ class Batch(unittest.TestCase):
         self.assertIn("\tterm:abuse\twhere:title", line)
         self.assertTrue(s.is_excluded(self.ONION))           # remembered in memory too
 
+    def test_stop_rule_bare_regex_with_alternation_keeps_every_term(self):
+        # 0.9.0-0.10.0 split every line on its first "|": "aa|bb|cc" became a
+        # rule named "aa" matching only "bb|cc", and "aa" was silently no
+        # longer stopped. A bare line is one regex, taken whole.
+        terms = self.d / "terms.txt"; terms.write_text("aa|bb|cc\n")
+        s = osc.StopRule(terms, None)
+        for word in ("aa", "bb", "cc"):
+            self.assertEqual(s.match(f"x {word} y"), "aa|bb|cc")
+        self.assertEqual(s.named, [])
+
+    def test_stop_rule_grouped_bare_regex_compiles_whole(self):
+        # the same split once cut "\b(dd|ee)\b|ff" inside its group: a crash
+        terms = self.d / "terms.txt"; terms.write_text("\\b(dd|ee)\\b|ff\n")
+        s = osc.StopRule(terms, None)
+        for word in ("dd", "ee", "ff"):
+            self.assertEqual(s.match(f"x {word} y"), "\\b(dd|ee)\\b|ff")
+
+    def test_stop_rule_named_rules_take_any_name_without_a_bar(self):
+        terms = self.d / "terms.txt"
+        terms.write_text("rule-1 | \\b(gg|hh)\\b\n"       # alternation inside a named regex
+                         "drugs/weapons | ii\n"           # punctuation in a name, as 0.10.0 read it
+                         "cp (en) | ^jj\\b\n"             # an anchored regex keeps its anchor
+                         "two  words\t|\tkk\n"            # inner blanks in the name, tabs around the bar
+                         "gore        | red\\s?room\n")   # names aligned in a column
+        s = osc.StopRule(terms, None)
+        self.assertEqual(s.named, ["rule-1", "drugs/weapons", "cp (en)", "two  words", "gore"])
+        self.assertEqual(s.match("x gg y"), "rule-1")
+        self.assertEqual(s.match("x hh y"), "rule-1")
+        self.assertIsNone(s.match("x rule-1 y"))             # the name is a label, never a pattern
+        self.assertEqual(s.match("x ii"), "drugs/weapons")
+        self.assertEqual(s.match("jj market"), "cp (en)")
+        self.assertEqual(s.match("x kk"), "two  words")
+        self.assertEqual(s.match("RedRoom"), "gore")
+
+    def test_stop_rule_refuses_what_it_would_have_to_guess(self):
+        # A bar with a blank beside it, once the line is split, is misread by
+        # SOME reading — and a guess that stops less is the bug again.
+        for line in ("abuse| xx",            # blank after the bar only
+                     "abuse |xx",            # blank before the bar only
+                     "kk|ll | mm",           # a bare regex with one spaced bar
+                     "abuse | xx | yy",      # alternation with blanks: literal blanks in a regex
+                     "| xx",
+                     "foo\\\\| bar",           # an escaped BACKSLASH, then a real bar
+                     "\\bfoo\\b | \\bbar\\b",  # read as named, but the "name" is regex syntax
+                     "[ab] | x"):
+            terms = self.d / "terms.txt"; terms.write_text(f"# c\n{line}\n")
+            with self.assertRaises(ValueError, msg=line) as cm:
+                osc.StopRule(terms, None)
+            self.assertIn("terms.txt:2: ambiguous", str(cm.exception))
+
+    def test_stop_rule_escaped_bars_and_classes_are_not_ambiguous(self):
+        terms = self.d / "terms.txt"; terms.write_text("a\\| b\n[ |]x\npipe | a\\|b\n")
+        s = osc.StopRule(terms, None)
+        self.assertEqual(s.match("an a| b here"), "a\\| b")
+        self.assertEqual(s.match("|x"), "[ |]x")
+        self.assertEqual(s.match("a|b"), "pipe")
+
+    def test_stop_rule_refuses_a_regex_that_matches_ordinary_text(self):
+        # it would stop EVERY target and fill the exclusions file — "a|b|" is
+        # the obvious case, an empty alternative inside a group the quiet one
+        for line in ("a|b|", "|a", "a||b", "rule | x*", "\\b(csam|pthc|)\\b", "\\b(a|b|)\\s",
+                     "\\b", ".", "\\s", "[a-z]", "[pedo|hurtcore]", "x", "[1-9]"):
+            terms = self.d / "terms.txt"; terms.write_text(f"{line}\n")
+            with self.assertRaises(ValueError, msg=line) as cm:
+                osc.StopRule(terms, None)
+            self.assertIn("matches ordinary text", str(cm.exception))
+        terms = self.d / "terms.txt"
+        terms.write_text("\\bmarket(place|)\\b\n(?=xyz)\n\\d{3,}\nred\\s?room\n")   # these stay
+        self.assertEqual(len(osc.StopRule(terms, None).terms), 4)
+
+    def test_stop_rule_refuses_what_would_silently_never_match(self):
+        for line, expected in (("abuse | forbidden # note", "'#' after a blank"),
+                               ("abuse | forb\u200bidden", "invisible or look-alike"),
+                               ("abuse \uff5c forbidden", "invisible or look-alike")):
+            terms = self.d / "terms.txt"; terms.write_text(f"{line}\n", encoding="utf-8")
+            with self.assertRaises(ValueError, msg=line) as cm:
+                osc.StopRule(terms, None)
+            self.assertIn(expected, str(cm.exception))
+        terms = self.d / "terms.txt"; terms.write_text("tag | \\#pthc\n")
+        self.assertEqual(osc.StopRule(terms, None).match("see #pthc"), "tag")   # \# is the literal way
+
+    def test_stop_rule_refuses_more_shapes_that_would_silently_misread(self):
+        for line, expected in (("#pthc", "a comment is '# text'"),              # a hashtag, not a comment
+                               ("- pthc", "Markdown list marker"),
+                               ("1. jailbait", "Markdown list marker"),
+                               ("pedo(phile)? | pthc", "looks like a regex"),     # quantifier in the "name"
+                               ("abuse | forb\u00a0idden", "U+00A0"),              # non-breaking space
+                               ("abuse | forb\u00adidden", "U+00AD"),              # soft hyphen
+                               ("abuse | forb\u200eidden", "U+200E")):             # bidi mark
+            terms = self.d / "terms.txt"; terms.write_text(f"{line}\n", encoding="utf-8")
+            with self.assertRaises(ValueError, msg=line) as cm:
+                osc.StopRule(terms, None)
+            self.assertIn(expected, str(cm.exception))
+        terms = self.d / "terms.txt"
+        terms.write_text("# a comment\n## another\n#\n18+ | \\+18\nC++ | xyz\nwhat? | abc\n", encoding="utf-8")
+        self.assertEqual(osc.StopRule(terms, None).named, ["18+", "C++", "what?"])   # plain names still pass
+
+    def test_stop_rule_regex_module_syntax_is_refused_on_the_stdlib_engine(self):
+        terms = self.d / "terms.txt"
+        for line in ("hurt(?:core){e<=1}", "child[[:space:]]+porn"):
+            terms.write_text(f"{line}\n")
+            if osc._USER_RE_HAS_TIMEOUT:              # the regex module reads both as meant
+                self.assertEqual(len(osc.StopRule(terms, None).terms), 1)
+            else:
+                with self.assertRaises(ValueError, msg=line) as cm:
+                    osc.StopRule(terms, None)
+                self.assertIn("hardened", str(cm.exception))
+
+    def test_exclusions_written_as_url_or_markdown_link_still_exclude(self):
+        ex = self.d / "ex.txt"
+        ex.write_text(f"{self.ONION}\n"                                   # a URL kept by hand
+                      f"[b]({self.ONION2})\n")                              # a Markdown link
+        s = osc.StopRule(None, ex)
+        self.assertTrue(s.is_excluded(self.ONION) and s.is_excluded(self.ONION2))
+        self.assertFalse(s.is_excluded(self.ONION3))
+
+    def test_exclusions_rules_for_the_writability_check(self):
+        osc.check_one = osc.measure_controls = lambda *a, **k: self.fail("fetched")
+        t = self.d / "list.txt"; t.write_text(self.ONION + "\n")
+        catalog = self.d / "catalog.md"; catalog.write_text(f"- [c](http://{'c' * 56}.onion/)\n")
+        terms = self.d / "terms.txt"; terms.write_text("abuse | forbidden\n")
+        # a directory that does not exist yet is created, as 0.10.0 did
+        new = self.d / "nested" / "dir" / "ex.txt"
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = osc.main([str(t), "--out-dir", str(self.d / "out"), "--catalog", str(catalog), "--indices-only",
+                           "--stop-terms", str(terms), "--exclusions", str(new)])
+        self.assertEqual(rc, 0); self.assertTrue(new.exists())
+        # a read-only list used as a fixed do-not-fetch list, without stop terms, is fine
+        ro = self.d / "ro.txt"; ro.write_text(f"{'a' * 56}.onion\n"); ro.chmod(0o444)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = osc.main([str(t), "--out-dir", str(self.d / "out2"), "--catalog", str(catalog),
+                               "--indices-only", "--exclusions", str(ro)])
+            self.assertEqual(rc, 0)
+        finally:
+            ro.chmod(0o644)
+
+    def test_stop_rule_no_blanks_around_the_bar_is_a_bare_regex(self):
+        # "name|regex" without blanks reads as one regex: it stops MORE (the
+        # would-be name too), never less — the safe side for a stop rule.
+        terms = self.d / "terms.txt"; terms.write_text("gore|red\\s?room\n")
+        s = osc.StopRule(terms, None)
+        self.assertEqual(s.match("RedRoom"), "gore|red\\s?room")
+        self.assertEqual(s.match("some gore"), "gore|red\\s?room")
+
+    def test_user_files_drop_every_bom(self):
+        # at the start (Windows editors) and in the middle (files joined with cat)
+        bom = "\ufeff"
+        terms = self.d / "terms.txt"
+        terms.write_text(f"{bom}abuse | \\bforbidden\\b\n{bom}gore | red\\s?room\n", encoding="utf-8")
+        ex = self.d / "ex.txt"
+        ex.write_text(f"{bom}{'a' * 56}.onion\t2026-09-13\tterm:x\twhere:title\n"
+                      f"{bom}{'b' * 56}.onion\t2026-09-13\tterm:x\twhere:title\n", encoding="utf-8")
+        s = osc.StopRule(terms, ex)
+        self.assertEqual(s.named, ["abuse", "gore"])
+        self.assertTrue(s.is_excluded(self.ONION) and s.is_excluded(self.ONION2))   # no quarantined address comes back
+        cats = self.d / "cats.txt"; cats.write_text(f"{bom}market | shop\n", encoding="utf-8")
+        self.assertEqual(osc.read_categories(cats).tag("a shop"), ["market"])
+        targets = self.d / "t.txt"; targets.write_text(f"{bom}forbidden place | {self.ONION}\n", encoding="utf-8")
+        self.assertEqual(osc.read_targets(targets), [("forbidden place", self.ONION)])
+
+    def test_categories_oversized_repeat_is_named_not_a_traceback(self):
+        cats = self.d / "cats.txt"; cats.write_text("t | x{99999999999}\n")
+        with self.assertRaises(ValueError) as cm:
+            osc.read_categories(cats)
+        self.assertIn("cats.txt:1: bad regex", str(cm.exception))
+
+    def test_stop_rule_bad_file_names_itself_and_fetches_nothing(self):
+        osc.check_one = osc.measure_controls = lambda *a, **k: self.fail("fetched despite a bad stop rule")
+        real_load_remote = osc.Source.load_remote
+        osc.Source.load_remote = lambda *a, **k: self.fail("index list downloaded despite a bad stop rule")
+        try:
+            t = self.d / "list.txt"; t.write_text(self.ONION + "\n")
+            srcs = self.d / "sources.txt"; srcs.write_text(f"r | http://{'b' * 56}.onion/list.md | curated\n")
+            empty = self.d / "empty.txt"; empty.write_text("# only a comment\n")
+            cases = [("terms.txt", "bad | (unclosed\n", [], "terms.txt:1: bad regex"),
+                     ("terms.txt", "x{99999999999}\n", [], "terms.txt:1: bad regex"),   # OverflowError
+                     ("terms.txt", b"caf\xe9 | x\n", [], "terms.txt: not UTF-8"),
+                     ("empty.txt", None, [], "no rule read"),
+                     ("terms.txt", "abuse | xyz\n", ["--exclusions", str(self.d)], "exclusions file is a directory"),
+                     ("terms.txt", "abuse | xyz\n", ["--exclusions", str(t / "ex.txt")], "exclusions file not writable")]
+            for fname, content, extra, expected in cases:
+                path = self.d / fname
+                if content is not None:
+                    path.write_bytes(content if isinstance(content, bytes) else content.encode())
+                for mode in ([], ["--indices", str(srcs), "--indices-only"]):    # every mode stops before any request
+                    err = io.StringIO()
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                        rc = osc.main([str(t), "--out-dir", str(self.d / "out"), "--no-html",
+                                       "--stop-terms", str(path), *extra, *mode])
+                    self.assertEqual(rc, 2, (fname, content, mode))
+                    self.assertIn(expected, err.getvalue())
+        finally:
+            osc.Source.load_remote = real_load_remote
+        self.assertFalse((self.d / "out").exists())
+
+    def test_stop_rule_startup_line_says_how_each_term_was_read(self):
+        terms = self.d / "terms.txt"; terms.write_text("abuse | forbidden\naa|bb\n")
+        self.script({self.ONION: self.online("A", self.ONION)}, [True])
+        t = self.d / "list.txt"; t.write_text(self.ONION + "\n")
+        catalog = self.d / "catalog.md"; catalog.write_text(f"- [c](http://{'c' * 56}.onion/)\n")
+        for extra in ([], ["--catalog", str(catalog), "--indices-only"]):      # every mode, before any loading
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                osc.main([str(t), "--out-dir", str(self.d / "out"), "--no-html", "--delay", "0", "0",
+                          "--stop-terms", str(terms), *extra])
+            out = err.getvalue()
+            self.assertIn("Stop rule: 2 term(s) (named: abuse, bare: 1)", out)
+            if extra:
+                self.assertLess(out.index("Stop rule:"), out.index("Loading"))
+
+    def test_indices_only_honours_the_stop_rule(self):
+        # a search source would otherwise be sent a quarantined address as a query
+        terms = self.d / "terms.txt"; terms.write_text("abuse | forbidden\n")
+        ex = self.d / "ex.txt"; ex.write_text(f"{'b' * 56}.onion\t2026-09-13\tterm:x\twhere:title\n")
+        catalog = self.d / "catalog.md"; catalog.write_text(f"- [c](http://{'c' * 56}.onion/)\n")
+        t = self.d / "list.txt"
+        t.write_text(f"forbidden place | {self.ONION}\nquarantined | {self.ONION2}\nfine | {self.ONION3}\n")
+        looked: list[str] = []
+        real_lookup = osc.Indices.lookup
+        def spy(ix, uri, **kw):
+            looked.append(uri)
+            return real_lookup(ix, uri, **kw)
+        osc.Indices.lookup = spy
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = osc.main([str(t), "--out-dir", str(self.d / "out"), "--catalog", str(catalog),
+                               "--indices-only", "--stop-terms", str(terms), "--exclusions", str(ex)])
+        finally:
+            osc.Indices.lookup = real_lookup
+        self.assertEqual(rc, 0)
+        self.assertEqual(looked, [self.ONION3])
+        out = json.loads(next((self.d / "out").glob("list-indices-*.json")).read_text())
+        self.assertEqual([r.get("status") for r in out], ["EXCLUDED", "EXCLUDED", None])
+        self.assertEqual(out[0]["stop_term"], "abuse")
+        self.assertNotIn("indices", out[0]); self.assertIn("indices", out[2])
+        self.assertIn("a" * 56, ex.read_text())              # the label hit joined the exclusions file
+
     def test_apply_stop_rule_scrubs_the_record(self):
         terms = self.d / "terms.txt"; terms.write_text("forbidden\n")
         s = osc.StopRule(terms, None)

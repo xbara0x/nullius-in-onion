@@ -88,7 +88,9 @@ python3 nullius.py new-links.txt --registry --indices-only
 python3 nullius.py new-links.txt --registry --catalog ~/src/deepdarkCTI
 ```
 
-Each record gains an `indices` block with a verdict and the evidence:
+Each record gains an `indices` block with a verdict and the evidence (with `--stop-terms`/
+`--exclusions`, a target the stop rule excludes is an `EXCLUDED` record instead, with no
+`indices` block, and is never looked up):
 
 | `verdict` | What it means |
 |---|---|

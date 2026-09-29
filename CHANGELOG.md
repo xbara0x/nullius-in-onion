@@ -7,6 +7,82 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-28
+
+A security release for the stop rule. It is a minor, not a patch, because the
+`--indices-only` file changes shape (see **Changed**) and stop-term files that
+0.10.0 accepted may now stop the run.
+
+### Changed
+- **`--indices-only` honours the stop rule**, and its file may now hold
+  `EXCLUDED` records — `name`, `uri`, `status`, `stop_term`/`stop_where` — with
+  no `indices` block. Before, the rule was ignored in that mode (see Security).
+- **Stop-term files are read strictly.** A line is a named rule only in the
+  shape `name | regex` (blanks around the bar; the name is any text without a
+  bar); any other line is one bare regex, taken whole. A line the tool would
+  have to guess stops the run with its file and line, before any request: a
+  bar with a blank on one side only (`name| x`), a bare regex with a spaced bar
+  (`a|b | c`), spaced alternatives inside a named regex (`name | a | b` — the
+  blanks are literal, use `\s`), a "name" that is regex syntax
+  (`\bfoo\b | x`, `pedo(phile)? | x`), a `#` after a blank (an inline comment
+  used to become part of the regex), a Markdown list marker (`- pthc`), and an
+  invisible or look-alike character (any format character — zero-width, bidi
+  mark, soft hyphen —, a space other than U+0020, a bar that is not `|`). So do
+  a regex that matches ordinary text — an empty alternative (`a|b|`,
+  `\b(a|b|)\b`), a class typed for a group (`[pedo|hurtcore]`), a
+  one-character term — which stopped every target and filled the exclusions
+  file; syntax only the `regex` module reads (`{e<=1}`, `[[:space:]]`) when the
+  stdlib `re` is the engine; and a `--stop-terms` file with no rule in it.
+- **`#` starts a comment only as `# text`** (a blank after it) or `##`. A line
+  like `#pthc` used to vanish as a comment; it now stops the run — write a
+  hashtag term as `\#pthc`.
+
+### Fixed
+- A malformed or oversized regex in `--stop-terms` or `--categories`, a term
+  file that is not UTF-8, and — with `--stop-terms` — an `--exclusions` path
+  that cannot be written (missing directories are created, as before) now stop
+  the run with the file (and line) and exit code 2 before any request — index
+  downloads included — instead of a traceback, or a traceback after the page
+  was already fetched. The startup line says how the terms were read
+  (`named: …, bare: N`) and which regex engine runs them, in every mode.
+- A BOM anywhere in a user-written file (targets, sources, stop terms,
+  exclusions, categories) is dropped: at the start from Windows editors, in the
+  middle from files joined with `cat`. It used to glue U+FEFF to a line.
+- Docs: the body is read whenever `--stop-terms` is given, not only with
+  `--categories` (the code always did this; the guide said otherwise); the
+  exclusions-file format is described the same way everywhere, with `body`.
+
+### Security
+- **A bare `--stop-terms` regex with alternation was cut at its first `|`, and
+  its first term silently stopped being stopped.** Since 0.9.0 every line was
+  split on its first `|` to read `"name | regex"`, so the bare regex `a|b|c`
+  became a rule *named* `a` matching only `b|c`: pages matching `a` were
+  fetched, recorded and kept, with no error (a grouped one, `\b(a|b)\b`,
+  crashed instead). Fixed by the strict reading above.
+- **`--indices-only` ignored the stop rule**: a search source was sent every
+  target as a query, a quarantined address included.
+- **An `--exclusions` file with a BOM lost its first address**, and **an entry
+  kept as a URL or a Markdown link was never matched** — either way the
+  quarantined address was fetched again. Such entries now read as their host.
+
+**Upgrading.**
+- Files in the documented `name | regex` shape read as before, except the
+  shapes listed under **Changed**, which now stop the run and name the line.
+- A `name|regex` line with **no** blanks now reads as one bare regex. It stops
+  more — the would-be name too, anywhere in the page, body included, and
+  permanently once the address is in the exclusions file — never less (unless
+  the name ends in a backslash: `\|` is a literal bar). Rewrite such lines as
+  `name | regex`; the startup line shows them as `bare`. Exclusions they made
+  carry `term:<the whole line>` and can be removed by that.
+- A target with no label is matched by its URL — on purpose, a vanity onion
+  address can spell the word. A short term with no `\b` (`cp`) can therefore
+  hit a random address by chance; write short terms with word boundaries
+  (`\bcp\b`).
+- If a run under 0.9.0–0.10.0 used a bare regex with `|`, its outputs may hold
+  titles of pages that rule was meant to stop: move its journal, JSON, HTML and
+  `-diff.json` files to the trash, and run the list again with a fresh
+  `--journal` path (that reads those pages once more, now under the rule).
+
 ## [0.10.0] — 2026-09-20
 
 ### Added
@@ -407,7 +483,8 @@ Initial release.
 - Options: `--out-dir`, `--proxy`, `--timeout`, `--delay`, `--no-controls`,
   `--no-html`.
 
-[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/xbara0x/nullius-in-onion/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/xbara0x/nullius-in-onion/compare/v0.7.0...v0.8.0

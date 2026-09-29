@@ -91,11 +91,11 @@ population — if the controls fail too, the run says so in capitals and exits w
 | `--indices FILE` | — | sources list, one per line `Name \| URL-or-path \| kind` |
 | `--registry` | off | also use the registry shipped with the project (`indices/sources.txt`) |
 | `--catalog PATH …` | — | add a local file or tree as an index source of kind `self` |
-| `--indices-only` | off | cross-check only; measure no target |
+| `--indices-only` | off | cross-check only; measure no target. The stop rule applies: a target it excludes is recorded `EXCLUDED` (no `indices` block) and not looked up |
 | `--diff-previous` | off | after the run, compare with the most recent earlier run of the same list in `--out-dir`; writes `<base>-diff.json` |
 | `--journal FILE` | — | append every record as measured; relaunch skips what is there |
 | `--controls-every N` | 0 | controls at the start, after every N targets and at the end; a failed checkpoint stops the run |
-| `--stop-terms FILE` | — | `"name \| regex"` (or bare regex) per line; a matching label, title or meta text makes the target `EXCLUDED`, recording the rule name |
+| `--stop-terms FILE` | — | `"name \| regex"` per line (blanks around the bar; the name is any text without a bar) or a bare regex taken whole — `a\|b\|c` stops all three. A matching label, title, meta text or body makes the target `EXCLUDED`, recording the rule name. A line the tool would have to guess, a regex matching ordinary text, one that does not compile, or a file with no rule stops the run with its file and line, before any request |
 | `--exclusions FILE` | — | do-not-fetch list, read before the run and appended on every exclusion |
 | `--categories FILE` | — | topic tags for each ONLINE page from a "tag then regex" lexicon; only tag names are kept, never page text |
 | `--descriptor` | off | for every OFFLINE `.onion`, ask the Tor control port whether its descriptor is published (needs `stem`) |
@@ -162,7 +162,7 @@ OFFLINE records add `error_class` and a truncated `error` string; with
 
 EXCLUDED records (stop rule) carry only `name`, `uri`, `checked_at`, `status`,
 `status_detail`, `http_code: null`, `title: null` and — when a term matched —
-`stop_term` and `stop_where` (`label`, `title` or `meta`).
+`stop_term` and `stop_where` (`label`, `title`, `meta` or `body`).
 
 Control records add `checkpoint` (`start`, `after N`, `end`).
 

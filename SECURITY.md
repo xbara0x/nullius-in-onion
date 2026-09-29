@@ -23,8 +23,8 @@ you want it.
 
 | Version | Supported |
 |---|---|
-| 0.10.x | ✅ |
-| < 0.10 | ❌ |
+| 0.11.x | ✅ |
+| < 0.11 | ❌ |
 
 The major is `0`: a minor release may change the JSON layout, and the
 [CHANGELOG](CHANGELOG.md) says when it does.

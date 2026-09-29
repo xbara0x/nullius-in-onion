@@ -69,9 +69,12 @@ import argparse
 import json
 import random
 import re
+import string
 import subprocess
 import sys
 import time
+import unicodedata
+import warnings
 from datetime import datetime, timezone
 from html import unescape as html_unescape
 from pathlib import Path
@@ -86,7 +89,7 @@ from bs4 import BeautifulSoup
 # warnings, which is worse.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-__version__ = "0.10.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
+__version__ = "0.11.0"  # also read by pyproject.toml; keep CHANGELOG.md in step
 
 DEFAULT_PROXY = "socks5h://127.0.0.1:9050"
 DEFAULT_TIMEOUT = 25
@@ -162,6 +165,18 @@ def compile_user(expr: str):
     return _user_re.compile(expr, _user_re.IGNORECASE)
 
 
+def read_user_text(path: Path) -> str:
+    """A file the user wrote: UTF-8, with any BOM dropped — Windows editors put
+    one in front, and files joined with cat carry one in the middle; either
+    would glue U+FEFF to a line (a stop term that reads differently, an
+    excluded address that no longer matches) — and a decoding error that
+    names the file."""
+    try:
+        return path.read_text(encoding="utf-8-sig").replace("\ufeff", "")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path}: not UTF-8 ({exc})") from exc
+
+
 def search_user(pattern, text: str) -> bool:
     """Search a user pattern against (hostile) text, bounded by a deadline when
     the `regex` module is installed. A pattern that blows the deadline fails
@@ -198,7 +213,7 @@ class Config:
 def read_targets(path: Path) -> list[tuple[str, str]]:
     """One target per line: "Name | URL" or just "URL". '#' starts a comment."""
     entries = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8-sig").replace("\ufeff", "").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -542,7 +557,7 @@ def read_sources(path: Path) -> list[Source]:
     (see SOURCE_KINDS), and a bare URL/path is its own name. Lines starting
     with "#" are ignored. A local path is resolved relative to the file."""
     sources = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8-sig").replace("\ufeff", "").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -790,7 +805,7 @@ def read_categories(path: Path) -> Lexicon:
     error named with its line, not a tag that silently never matches."""
     order: list[str] = []
     by_name: dict[str, list[re.Pattern]] = {}
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for lineno, line in enumerate(read_user_text(path).splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -800,7 +815,7 @@ def read_categories(path: Path) -> Lexicon:
             continue
         try:
             pat = compile_user(expr)
-        except UserPatternError as exc:
+        except (UserPatternError, OverflowError, RecursionError) as exc:
             raise ValueError(f"{path}:{lineno}: bad regex {expr!r}: {exc}") from exc
         if name not in by_name:
             by_name[name] = []
@@ -1729,39 +1744,125 @@ class StopRule:
     """Stop on a target whose label, title or meta text matches one of your
     terms — and keep nothing about it but the address, the date and the term.
 
-    The terms are yours (one regular expression per line, case-insensitive;
-    the tool ships none). The exclusions file is the memory: an address that
+    The terms are yours — one per line, "name | regex" or a bare regex (see
+    NAMED_RULE), case-insensitive; the tool ships none. A line that could be
+    read either way is refused, never guessed. The exclusions file is the
+    memory: an address that
     goes there is never fetched again by any later run that reads the file,
     which is the point — the rule exists so that a page is read once, not
-    twice. Lines are "<host> <date> term:<term> where:<label|title|meta>";
+    twice. Lines are "<host> TAB <date> TAB term:<rule> TAB where:<label|title|meta|body>";
     "#" comments and a Markdown table with the host in the first cell are
     read too. An .onion entry may be a prefix of the host (16+ characters);
     a clearnet entry must match the whole host.
     """
 
     MIN_PREFIX = 16
+    # A named rule is "name | regex": a name (any text without a bar),
+    # whitespace, the bar, whitespace, the regex. Any other line is ONE bare
+    # regex, taken whole. 0.9.0-0.10.0 split every line on its first "|", so the
+    # bare regex "a|b|c" became a rule named "a" matching only "b|c" — "a"
+    # silently stopped being stopped.
+    NAMED_RULE = re.compile(r"^([^|\s](?:[^|]*[^|\s])?)\s+\|\s+(\S.*)$")
+    # Once the line is split, a bar with a blank beside it means some reading
+    # is wrong whatever we pick ("name| x", "k|l | m", "a | b" meant as
+    # alternation — a blank in a regex is literal): refuse, do not guess.
+    # Escapes and character classes are blanked out first ("a\\| b", "[ |]").
+    AMBIGUOUS_BAR = re.compile(r"\s\||\|\s")
+    ESCAPES_AND_CLASSES = re.compile(r"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]")
+    # A "name" that looks like regex syntax: a bare regex with a spaced bar was
+    # read as "name | regex", and its first alternative would be lost. Plain
+    # "+" and a final "?" stay allowed ("18+", "C++", "what?").
+    REGEX_LOOKING_NAME = re.compile(r"\\|\[|\(\?|^\^|\$$|[.)\]][?*]|\w\?\w|\{\d+(?:,\d*)?\}")
+    # Bars that are not "|": a term written with one never splits or alternates.
+    LOOKALIKE_BARS = "\uff5c\u00a6\u2502\u2223\u01c0\u05c0\u2503\uffe8"
+    # A Markdown list marker: "- pthc" would be the literal "- pthc".
+    LIST_MARKER = re.compile(r"^(?:[-*+]|\d+[.)])\s")
+    # Text no stop term should match. One that does stops EVERY target and
+    # fills the exclusions file: an empty alternative ("a|b|", "\\b(a|b|)\\b"),
+    # "\\b", ".", "\\s", a class typed for a group ("[pedo|hurtcore]"), a
+    # one-character term...
+    ORDINARY = ("", " ", "a b", *string.ascii_letters, *string.digits, *string.punctuation)
+    # Syntax only the `regex` module (the `hardened` extra) understands; the
+    # stdlib `re` would read it as something else, silently.
+    FUZZY = re.compile(r"\{\s*[edis]\s*(?:<=?|=)")
+
+    @classmethod
+    def _invisible(cls, text: str) -> str | None:
+        """The first character that would make a term silently never match:
+        a format character (zero-width, bidi mark, soft hyphen), a space other
+        than U+0020 (NBSP...), or a bar look-alike."""
+        for ch in text:
+            if unicodedata.category(ch) == "Cf" or (unicodedata.category(ch) == "Zs" and ch != " ") \
+                    or ch in cls.LOOKALIKE_BARS:
+                return f"U+{ord(ch):04X}"
+        return None
 
     def __init__(self, terms_path: Path | None = None, exclusions_path: Path | None = None):
         self.terms: list[tuple[str, re.Pattern]] = []
         self.exclusions_path = exclusions_path
         self.onion_prefixes: list[str] = []
         self.hosts: set[str] = set()
+        self.named: list[str] = []     # the rules read as "name | regex", in file order
         if terms_path is not None:
-            for line in terms_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
+            for lineno, line in enumerate(read_user_text(terms_path).splitlines(), 1):
+                line = line.strip(" \t\r\n")
+                if not line:
                     continue
-                # "name | regex" (like --categories) records the NAME on a hit;
-                # a bare regex names itself with its own pattern text. Either way
-                # what is recorded is the rule, never a span of the page.
-                rule, sep, expr = line.partition("|")
-                rule, expr = rule.strip(), expr.strip()
-                if sep and expr:
-                    self.terms.append((rule, compile_user(expr)))
-                else:
-                    self.terms.append((line, compile_user(line)))
+                where = f"{terms_path}:{lineno}"
+                if line.startswith("#"):
+                    # "# text" is a comment; "#pthc" is a hashtag term that
+                    # would otherwise vanish as one, silently.
+                    if len(line) > 1 and not line[1].isspace() and line[1] != "#":
+                        raise ValueError(f"{where}: {line.split()[0]!r} — a comment is '# text' (a blank after "
+                                         "the #); a hashtag term is written \\#tag")
+                    continue
+                # A named rule records its NAME on a hit; a bare regex names
+                # itself with its own pattern text. Either way what is recorded
+                # is the rule, never a span of the page.
+                bad = self._invisible(line)
+                if bad:
+                    raise ValueError(f"{where}: an invisible or look-alike character ({bad}: zero-width, "
+                                     "a non-breaking space, a bar that is not '|') — the term would never match; "
+                                     "write it with \\u escapes if you mean it")
+                if self.LIST_MARKER.match(line):
+                    raise ValueError(f"{where}: a Markdown list marker — one term per line, without '- ' or '1. '")
+                named = self.NAMED_RULE.match(line)
+                rule, expr = named.groups() if named else (line, line)
+                if named and self.REGEX_LOOKING_NAME.search(rule):
+                    raise ValueError(f"{where}: ambiguous — the name {rule!r} looks like a regex: a bare regex "
+                                     "with a spaced '|'? Name it plainly ('name | regex') or drop the blanks "
+                                     "around its bars")
+                plain = self.ESCAPES_AND_CLASSES.sub("_", expr)
+                if self.AMBIGUOUS_BAR.search(plain):
+                    raise ValueError(f"{where}: ambiguous — a '|' with a blank beside it. Write 'name | regex' "
+                                     "(blanks around ONE bar), or a bare regex with no blanks around its bars "
+                                     "(a blank inside a regex is literal: use \\s)")
+                if re.search(r"\s#", plain) and not expr.startswith("(?x)"):
+                    raise ValueError(f"{where}: '#' after a blank — a comment goes on its own line (the term "
+                                     "would never match); write \\# for a literal #")
+                if not _USER_RE_HAS_TIMEOUT and self.FUZZY.search(plain):
+                    raise ValueError(f"{where}: fuzzy matching ({{e<=1}}...) needs the `hardened` extra (the "
+                                     "regex module); the stdlib re would read it literally")
+                try:
+                    with warnings.catch_warnings():
+                        # the stdlib re warns, then reads "[[:space:]]" as a
+                        # plain set — a POSIX class the author did not get
+                        warnings.simplefilter("error", FutureWarning)
+                        pat = compile_user(expr)
+                except FutureWarning as exc:
+                    raise ValueError(f"{where}: {expr!r} — {exc} (a POSIX class like [[:space:]]? it needs "
+                                     "the `hardened` extra; or write \\s)") from exc
+                except (UserPatternError, OverflowError, RecursionError) as exc:
+                    raise ValueError(f"{where}: bad regex {expr!r}: {exc}") from exc
+                if any(search_user(pat, text) for text in self.ORDINARY):
+                    raise ValueError(f"{where}: {expr!r} matches ordinary text, so it would stop every target "
+                                     "(an empty alternative — a stray '|'? a [class] typed for a (group)? "
+                                     "a one-character term?)")
+                self.terms.append((rule, pat))
+                if named:
+                    self.named.append(rule)
         if exclusions_path is not None and exclusions_path.is_file():
-            for line in exclusions_path.read_text(encoding="utf-8").splitlines():
+            for line in read_user_text(exclusions_path).splitlines():
                 self._remember(self._first_cell(line))
 
     @staticmethod
@@ -1772,7 +1873,15 @@ class StopRule:
         if line.startswith("|"):
             line = line[1:].split("|", 1)[0]
         cell = line.split()[0] if line.split() else ""
-        return cell.strip("`").lower()
+        cell = cell.strip("`").lower()
+        # a URL or a Markdown link kept by hand is the host it points at —
+        # read literally it would never match, and the address comes back
+        link = re.match(r"^\[[^\]]*\]\(([^)\s]+)\)", cell)
+        if link:
+            cell = link.group(1)
+        if "://" in cell:
+            cell = host_of(cell)
+        return cell
 
     def _remember(self, entry: str) -> None:
         if not entry or entry.startswith("-"):
@@ -1897,7 +2006,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="add a local file or directory tree as an index source (shortcut for a path line in --indices)")
     p.add_argument("--indices-only", action="store_true",
                    help="cross-check only; measure no target (list sources are still fetched once, "
-                        "search engines still queried once per target)")
+                        "search engines still queried once per target the stop rule lets through)")
     p.add_argument("--diff-previous", action="store_true",
                    help="after the run, compare it with the most recent earlier run of the same list "
                         "in --out-dir and write <base>-diff.json")
@@ -1918,12 +2027,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "a failed checkpoint stops the run and discards the segment since the last good one "
                         "(default: controls at the end only)")
     b.add_argument("--stop-terms", type=Path, metavar="FILE",
-                   help='"name | regex" (or a bare regex) per line, case-insensitive; a label, title or '
-                        "meta text that matches makes the target EXCLUDED, recording the rule name — never "
-                        "a span of the page")
+                   help='"name | regex" per line (blanks around the bar) or a bare regex taken whole, so '
+                        '"a|b|c" stops all three; case-insensitive. A line that could be read either way, or '
+                        "a regex matching ordinary text, stops the run. A label, title, meta text or body that "
+                        "matches makes the target EXCLUDED, recording the rule name — never a span of the page")
     b.add_argument("--exclusions", type=Path, metavar="FILE",
                    help="persisted do-not-fetch list: read before the run, appended on every exclusion "
-                        "(<host> <date> term:<term> where:<label|title|meta>)")
+                        "(<host> TAB <date> TAB term:<rule> TAB where:<label|title|meta|body>)")
     d = p.add_argument_group("descriptor", "down, or gone? — ask the Tor control port whether an OFFLINE onion "
                                            "is still published on the HSDirs (needs the stem package)")
     d.add_argument("--descriptor", action="store_true",
@@ -1944,6 +2054,10 @@ def print_indices_summary(indices: "Indices", results: list[dict]) -> None:
         elif src.is_search and src.query_failures:
             print(f"  source {src.name}: {src.query_failures} of {src.queries + src.query_failures} queries failed — "
                   "those records carry it in sources_failed", file=sys.stderr)
+    excluded = sum(1 for r in results if "indices" not in r)
+    results = [r for r in results if "indices" in r]
+    if excluded:
+        print(f"  {excluded} target(s) excluded by the stop rule — not looked up", file=sys.stderr)
     counts = {"listed": 0, "name-match": 0, "unlisted": 0}
     for r in results:
         counts[r["indices"]["verdict"]] += 1
@@ -2022,6 +2136,40 @@ def main(argv: list[str] | None = None) -> int:
     if args.descriptor and args.descriptor_timeout <= 0:
         print("--descriptor-timeout must be a positive number of seconds", file=sys.stderr)
         return 2
+    # Before any request — index downloads included — and in every mode: a bad
+    # term file stops here, and --indices-only honours the rule too (a search
+    # source would otherwise be sent a quarantined address as a query).
+    try:
+        stop = StopRule(args.stop_terms, args.exclusions)
+        categories = read_categories(args.categories) if args.categories else None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.stop_terms is not None and not stop.terms:
+        print(f"{args.stop_terms}: no rule read (empty, or comments only) — refusing to run without the "
+              "stop rule you asked for", file=sys.stderr)
+        return 2
+    if args.exclusions is not None and args.exclusions.is_dir():
+        print(f"exclusions file is a directory: {args.exclusions}", file=sys.stderr)
+        return 2
+    if args.exclusions is not None and args.stop_terms is not None:
+        # only a stop term ever writes to it — prove it can, before any request
+        try:
+            args.exclusions.parent.mkdir(parents=True, exist_ok=True)
+            args.exclusions.open("a", encoding="utf-8").close()
+        except OSError as exc:
+            print(f"exclusions file not writable: {args.exclusions} ({exc.strerror})", file=sys.stderr)
+            return 2
+    if stop.active:
+        # How each line was read, before any request: a line meant as a bare
+        # regex but read as "name | regex" shows up here as a name.
+        bare = len(stop.terms) - len(stop.named)
+        how = ", ".join(filter(None, (f"named: {', '.join(stop.named)}" if stop.named else "",
+                                      f"bare: {bare}" if bare else "")))
+        how = f" ({how})" if how else ""
+        engine = "regex" if _USER_RE_HAS_TIMEOUT else "re"
+        print(f"Stop rule: {len(stop.terms)} term(s){how}, {len(stop.hosts) + len(stop.onion_prefixes)} "
+              f"excluded address(es) on file; engine: {engine}.", file=sys.stderr)
     indices: Indices | None = Indices(sources) if sources else None
 
     session = requests.Session()
@@ -2041,8 +2189,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.indices_only:
         assert indices is not None
-        results = [{"name": name, "uri": uri, "indices": indices.lookup(uri, label=name)}
-                   for name, uri in targets]
+        results = []
+        for name, uri in targets:
+            if stop.is_excluded(uri):
+                results.append(excluded_record(name, uri, "EXCLUDED (on the exclusions file, not looked up)"))
+            elif (term := stop.match(name)):
+                stop.exclude(uri, term, "label")
+                results.append(excluded_record(name, uri, "EXCLUDED (stop term in label, not looked up)",
+                                               term, "label"))
+            else:
+                results.append({"name": name, "uri": uri, "indices": indices.lookup(uri, label=name)})
         indices.close_search_sources()
         args.out_dir.mkdir(parents=True, exist_ok=True)
         base = unique_base(args.out_dir, args.targets.stem + "-indices")
@@ -2052,21 +2208,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSON: {json_path}", file=sys.stderr)
         return 3 if any(s.error for s in sources) else 0
 
-    stop = StopRule(args.stop_terms, args.exclusions)
-    try:
-        categories = read_categories(args.categories) if args.categories else None
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
     descriptors = DescriptorChecker(args.control_port, args.control_socket, args.descriptor_timeout) if args.descriptor else None
     journal = Journal(args.journal) if args.journal else None
     done: dict[str, dict] = journal.load() if journal else {}
     pending = [(name, uri) for name, uri in targets if record_key(uri) not in done]
     if journal:
         print(f"Journal {journal.path}: {len(done)} already measured, {len(pending)} to go.", file=sys.stderr)
-    if stop.active:
-        print(f"Stop rule: {len(stop.terms)} term(s), {len(stop.hosts) + len(stop.onion_prefixes)} "
-              f"excluded address(es) on file.", file=sys.stderr)
 
     controls: list[dict] = []
     circuit_ok = True
