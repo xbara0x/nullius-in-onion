@@ -7,6 +7,15 @@ bump may change the JSON layout and says so under **Changed**.
 
 ## [Unreleased]
 
+### Added
+- **A project logo.** An onion cut open and drawn like a copperplate figure from
+  Hooke's *Micrographia* (1665) — half skin, half section, seen through a lens:
+  don't trust the skin, look inside. The README header switches between a light
+  and a dark lockup; the files, colours and usage rules are in
+  [`docs/brand/`](docs/brand/BRAND.md), under the project's MIT License.
+- README: a line saying the project is independent — not affiliated with or
+  endorsed by the Tor Project or the Royal Society.
+
 ## [0.11.0] — 2026-09-28
 
 A security release for the stop rule. It is a minor, not a patch, because the

@@ -1,4 +1,4 @@
-# Nullius in Onion
+<h1 align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/brand/lockup-dark.svg"><img src="docs/brand/lockup.svg" alt="Nullius in Onion" width="640"></picture></h1>
 
 [![tests](https://github.com/xbara0x/nullius-in-onion/actions/workflows/tests.yml/badge.svg)](https://github.com/xbara0x/nullius-in-onion/actions/workflows/tests.yml)
 [![version](https://img.shields.io/github/v/tag/xbara0x/nullius-in-onion?label=version&color=blue)](CHANGELOG.md)
@@ -211,6 +211,9 @@ exists precisely so a page you must not read is read once, by a program, and nev
 again by anyone. See [`SECURITY.md`](SECURITY.md) for the threat model and the
 "read once, keep nothing that describes the page" guarantees.
 
+**Independent.** Not affiliated with or endorsed by the Tor Project or the Royal
+Society; Tor is named only as the network it measures through.
+
 ---
 
 ## Why this exists
@@ -245,6 +248,7 @@ Security issues go **privately** — see [`SECURITY.md`](SECURITY.md).
 - **[Reference](docs/reference.md)** — options, files, JSON fields, exit codes, reading a result
 - **[Who lists it](docs/indices.md)** — the index cross-check in full
 - **Guides** — [diff](docs/guides/diff.md) · [down or gone?](docs/guides/descriptor.md) · [long lists](docs/guides/long-lists.md)
+- **[Brand](docs/brand/BRAND.md)** — the logo files and how to use them
 - [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`LICENSE`](LICENSE)
 
 ---
